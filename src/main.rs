@@ -14,7 +14,7 @@ use can::SocketCan;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "can_flash_loader", about = "CAN firmware flash loader")]
+#[command(name = "ajax", about = "Firmware update application for vehicle ECUs over CAN")]
 struct Cli {
     /// CAN interface.
     #[arg(long, global = true, default_value = "can0")]

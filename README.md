@@ -1,2 +1,2 @@
 # Ajax
-Our application for flashing firmware to vehicle ECUs over CAN
+Our application for updating vehicle ECU firmware over CAN
