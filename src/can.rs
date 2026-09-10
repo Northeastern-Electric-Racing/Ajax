@@ -15,7 +15,7 @@ struct SockAddrCan {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct LinuxCanFrame {
+struct SocketCanFrame {
     can_id: u32,
     can_dlc: u8,
     pad: u8,
@@ -83,7 +83,7 @@ impl SocketCan {
             anyhow::bail!("CAN identifier 0x{id:X} is out of range");
         };
 
-        let mut frame = LinuxCanFrame {
+        let mut frame = SocketCanFrame {
             can_id,
             can_dlc: data.len() as u8,
             pad: 0,
@@ -96,11 +96,11 @@ impl SocketCan {
         let written = unsafe {
             libc::write(
                 self.fd,
-                &frame as *const LinuxCanFrame as *const libc::c_void,
-                mem::size_of::<LinuxCanFrame>(),
+                &frame as *const SocketCanFrame as *const libc::c_void,
+                mem::size_of::<SocketCanFrame>(),
             )
         };
-        if written != mem::size_of::<LinuxCanFrame>() as isize {
+        if written != mem::size_of::<SocketCanFrame>() as isize {
             return Err(io::Error::last_os_error()).context("CAN transmit failed");
         }
         Ok(())
@@ -129,15 +129,15 @@ impl SocketCan {
             break;
         }
 
-        let mut frame: LinuxCanFrame = unsafe { mem::zeroed() };
+        let mut frame: SocketCanFrame = unsafe { mem::zeroed() };
         let read = unsafe {
             libc::read(
                 self.fd,
-                &mut frame as *mut LinuxCanFrame as *mut libc::c_void,
-                mem::size_of::<LinuxCanFrame>(),
+                &mut frame as *mut SocketCanFrame as *mut libc::c_void,
+                mem::size_of::<SocketCanFrame>(),
             )
         };
-        if read != mem::size_of::<LinuxCanFrame>() as isize {
+        if read != mem::size_of::<SocketCanFrame>() as isize {
             return Err(io::Error::last_os_error()).context("CAN receive failed");
         }
 
