@@ -9,7 +9,7 @@ mod types;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use flash::Flasher;
+use flash::FirmwareFlashManager;
 use can::SocketCan;
 use std::path::PathBuf;
 
@@ -72,15 +72,15 @@ fn run() -> Result<()> {
 
     let can = SocketCan::open(&interface)
         .with_context(|| format!("failed to open CAN interface {interface}"))?;
-    let flasher = Flasher::new(can, ecu.clone());
+    let flash_manager = FirmwareFlashManager::new(can, ecu.clone());
 
     match cli.command {
         Command::Ping => {
-            flasher.ping()?;
+            flash_manager.ping()?;
             println!("{} bootloader responded", ecu.label);
         }
         Command::Version => {
-            let info = flasher.get_version()?;
+            let info = flash_manager.get_version()?;
             let major = info.version >> 4;
             let minor = info.version & 0x0F;
 
@@ -95,11 +95,11 @@ fn run() -> Result<()> {
             );
         }
         Command::EnterBootloader => {
-            flasher.request_bootloader()?;
+            flash_manager.request_bootloader()?;
             println!("{} entered bootloader", ecu.label);
         }
         Command::StartApp => {
-            flasher.start_application()?;
+            flash_manager.start_application()?;
             println!("start-application command acknowledged");
         }
         Command::SetBaud { bit_rate } => {
@@ -107,7 +107,7 @@ fn run() -> Result<()> {
                 config_file.supported_bit_rates.contains(&bit_rate),
                 "bitrate {bit_rate} is not listed in config"
             );
-            flasher.change_baud_rate(bit_rate)?;
+            flash_manager.change_baud_rate(bit_rate)?;
             println!("bootloader accepted {bit_rate} bit/s");
             println!("reconfigure {interface} to the same bitrate before sending more CAN traffic");
         }
@@ -121,7 +121,7 @@ fn run() -> Result<()> {
             println!("Address:  0x{:08X}", image.address);
             println!("Size:     {} bytes", image.data.len());
             println!("CRC32:    0x{:08X}", image.crc32);
-            flasher.flash(&image, already_in_bootloader)?;
+            flash_manager.flash(&image, already_in_bootloader)?;
         }
     }
     Ok(())

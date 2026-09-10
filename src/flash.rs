@@ -8,12 +8,12 @@ const RETRY_DELAY: Duration = Duration::from_millis(100);
 const BOOT_DELAY: Duration = Duration::from_millis(750);
 const MAX_ATTEMPTS: usize = 3;
 
-pub struct Flasher {
+pub struct FirmwareFlashManager {
     can: SocketCan,
     ecu: EcuDefinition,
 }
 
-impl Flasher {
+impl FirmwareFlashManager {
     pub fn new(can: SocketCan, ecu: EcuDefinition) -> Self { Self { can, ecu } }
 
     pub fn ping(&self) -> Result<()> {
