@@ -20,6 +20,10 @@ struct Cli {
     #[arg(long, global = true, default_value = "can0")]
     interface: String,
 
+    /// Path to ECU config file.
+    #[arg(long, global = true)]
+    config: Option<PathBuf>,
+
     /// ECU name from config (for example BMS or VCU)
     #[arg(long)]
     ecu: String,
@@ -63,7 +67,7 @@ fn run() -> Result<()> {
     let executable_directory = executable_path
         .parent()
         .context("failed to determine executable directory")?;
-    let config_path = executable_directory.join("ecus.json");
+    let config_path = cli.config.unwrap_or_else(|| executable_directory.join("ecus.json"));
 
     let config_file = config::load(&config_path)?;
     let ecu = config::select_ecu(&config_file, &cli.ecu)?;
