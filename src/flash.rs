@@ -3,10 +3,18 @@ use anyhow::{Context, Result};
 use std::{io::{self, Write}, thread, time::{Duration, Instant}};
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
-const ERASE_TIMEOUT: Duration = Duration::from_secs(15);
+const PACKET_TIMEOUT: Duration = Duration::from_millis(500);
+const ERASE_TIMEOUT: Duration = Duration::from_secs(30);
 const RETRY_DELAY: Duration = Duration::from_millis(100);
 const BOOT_DELAY: Duration = Duration::from_millis(750);
 const MAX_ATTEMPTS: usize = 3;
+const MAX_WRITE_PACKET_ATTEMPTS: usize = 3;
+
+enum AckStatus {
+    Ack,
+    Nack,
+    Timeout,
+}
 
 pub struct FirmwareFlashManager {
     can: SocketCan,
@@ -66,7 +74,7 @@ impl FirmwareFlashManager {
             let length = protocol::MAXIMUM_WRITE_SIZE.min(image.data.len() - completed);
             let block = &image.data[completed..completed + length];
             let address = target_address + completed as u32;
-            self.retry("write", || self.write_block(address, block))?;
+            self.retry_write_block(address, block)?;
             completed += length;
 
             let percent = 10.0 + 80.0 * completed as f64 / image.data.len() as f64;
@@ -83,7 +91,7 @@ impl FirmwareFlashManager {
         );
 
         print_progress(97.0, "Swapping banks", None)?;
-        self.retry("bank-swap", || self.swap_banks())?;
+        self.swap_banks()?;
 
         print_progress(100.0, "Complete", None)?;
         println!();
@@ -125,8 +133,32 @@ impl FirmwareFlashManager {
         )
     }
 
-    fn write_block(&self, address: u32, data: &[u8]) -> Result<()> {
-        anyhow::ensure!(data.len() <= protocol::MAXIMUM_WRITE_SIZE, "write block too large");
+    fn retry_write_block(&self, address: u32, data: &[u8]) -> Result<()> {
+        for attempt in 1..=MAX_ATTEMPTS {
+            match self.write_block(address, data)? {
+                AckStatus::Ack => return Ok(()),
+                AckStatus::Nack => {
+                    if attempt < MAX_ATTEMPTS {
+                        thread::sleep(RETRY_DELAY);
+                    }
+                }
+                AckStatus::Timeout => {
+                    anyhow::bail!("write block timed out");
+                }
+            }
+        }
+
+        anyhow::bail!(
+            "write block rejected after {MAX_ATTEMPTS} attempts"
+        )
+    }
+
+    fn write_block(&self, address: u32, data: &[u8]) -> Result<AckStatus> {
+        anyhow::ensure!(
+            data.len() <= protocol::MAXIMUM_WRITE_SIZE,
+            "write block too large"
+        );
+
         let length = u16::try_from(data.len())?;
         let mut request = [0u8; 7];
         request[0] = protocol::WRITE_MEMORY;
@@ -134,24 +166,98 @@ impl FirmwareFlashManager {
         request[5..7].copy_from_slice(&length.to_be_bytes());
 
         self.can.clear()?;
-        self.can.send(self.ecu.request_can_id()?, &request)?;
-        self.wait_ack(protocol::WRITE_MEMORY, COMMAND_TIMEOUT)?;
+
+        match self.retry_write_request(&request)? {
+            AckStatus::Ack => {}
+            AckStatus::Nack => return Ok(AckStatus::Nack),
+            AckStatus::Timeout => {
+                anyhow::bail!(
+                    "timed out waiting for initial WRITE_MEMORY ACK after retries"
+                )
+            }
+        }
 
         let mut offset = 0usize;
         let mut sequence = 0u8;
+
         while offset < data.len() {
-            let payload_length = protocol::WRITE_FRAME_PAYLOAD_SIZE.min(data.len() - offset);
+            let payload_length =
+                protocol::WRITE_FRAME_PAYLOAD_SIZE.min(data.len() - offset);
+
             let mut frame = Vec::with_capacity(payload_length + 1);
             frame.push(sequence);
-            frame.extend_from_slice(&data[offset..offset + payload_length]);
-            self.can.send(self.ecu.write_data_can_id()?, &frame)?;
-            self.wait_ack(protocol::WRITE_MEMORY, COMMAND_TIMEOUT)?;
+            frame.extend_from_slice(
+                &data[offset..offset + payload_length]
+            );
+
+            match self.retry_write_packet(&frame)? {
+                AckStatus::Ack => {}
+                AckStatus::Nack => return Ok(AckStatus::Nack),
+                AckStatus::Timeout => {
+                    anyhow::bail!(
+                        "write packet sequence {sequence} timed out after                          {MAX_WRITE_PACKET_ATTEMPTS} attempts"
+                    )
+                }
+            }
+
             offset += payload_length;
             sequence = sequence.wrapping_add(1);
         }
 
-        // Final ACK is sent after the bootloader commits the complete block.
-        self.wait_ack(protocol::WRITE_MEMORY, COMMAND_TIMEOUT)
+        match self.wait_ack_status(protocol::WRITE_MEMORY, COMMAND_TIMEOUT)? {
+            AckStatus::Ack => Ok(AckStatus::Ack),
+            AckStatus::Nack => Ok(AckStatus::Nack),
+            AckStatus::Timeout => {
+                anyhow::bail!(
+                    "timed out waiting for final WRITE_MEMORY ACK"
+                )
+            }
+        }
+    }
+
+    fn retry_write_request(&self, request: &[u8]) -> Result<AckStatus> {
+        for attempt in 1..=MAX_WRITE_PACKET_ATTEMPTS {
+            self.can.send(self.ecu.request_can_id()?, request)?;
+
+            match self.wait_ack_status(
+                protocol::WRITE_MEMORY,
+                COMMAND_TIMEOUT,
+            )? {
+                AckStatus::Ack => return Ok(AckStatus::Ack),
+                AckStatus::Nack => return Ok(AckStatus::Nack),
+                AckStatus::Timeout => {
+                    if attempt < MAX_WRITE_PACKET_ATTEMPTS {
+                        thread::sleep(RETRY_DELAY);
+                    }
+                }
+            }
+        }
+
+        Ok(AckStatus::Timeout)
+    }
+
+    fn retry_write_packet(
+        &self,
+        frame: &[u8],
+    ) -> Result<AckStatus> {
+        for attempt in 1..=MAX_WRITE_PACKET_ATTEMPTS {
+            self.can.send(self.ecu.write_data_can_id()?, frame)?;
+
+            match self.wait_ack_status(
+                protocol::WRITE_MEMORY,
+                PACKET_TIMEOUT,
+            )? {
+                AckStatus::Ack => return Ok(AckStatus::Ack),
+                AckStatus::Nack => return Ok(AckStatus::Nack),
+                AckStatus::Timeout => {
+                    if attempt < MAX_WRITE_PACKET_ATTEMPTS {
+                        thread::sleep(RETRY_DELAY);
+                    }
+                }
+            }
+        }
+
+        Ok(AckStatus::Timeout)
     }
 
     fn verify(&self) -> Result<u32> {
@@ -173,19 +279,52 @@ impl FirmwareFlashManager {
     }
 
     fn wait_ack(&self, command: u8, timeout: Duration) -> Result<()> {
+        match self.wait_ack_status(command, timeout)? {
+            AckStatus::Ack => Ok(()),
+            AckStatus::Nack => {
+                anyhow::bail!(
+                    "bootloader rejected command 0x{command:02X}"
+                )
+            }
+            AckStatus::Timeout => {
+                anyhow::bail!(
+                    "timed out waiting for ACK to command 0x{command:02X}"
+                )
+            }
+        }
+    }
+
+    fn wait_ack_status(
+        &self,
+        command: u8,
+        timeout: Duration,
+    ) -> Result<AckStatus> {
         let response_id = self.ecu.response_can_id()?;
         let deadline = Instant::now() + timeout;
+
         while Instant::now() < deadline {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            let Some(frame) = self.can.receive(remaining)? else { break; };
-            if frame.id != response_id || frame.data.len() < 2 || frame.data[1] != command { continue; }
+            let remaining =
+                deadline.saturating_duration_since(Instant::now());
+
+            let Some(frame) = self.can.receive(remaining)? else {
+                break;
+            };
+
+            if frame.id != response_id
+                || frame.data.len() < 2
+                || frame.data[1] != command
+            {
+                continue;
+            }
+
             match frame.data[0] {
-                protocol::ACK => return Ok(()),
-                protocol::NACK => anyhow::bail!("bootloader rejected command 0x{command:02X}"),
+                protocol::ACK => return Ok(AckStatus::Ack),
+                protocol::NACK => return Ok(AckStatus::Nack),
                 _ => {}
             }
         }
-        anyhow::bail!("timed out waiting for ACK to command 0x{command:02X}")
+
+        Ok(AckStatus::Timeout)
     }
 
     fn wait_response(&self, command: u8, minimum_length: usize, timeout: Duration) -> Result<CanFrame> {
