@@ -8,7 +8,7 @@ const ERASE_TIMEOUT: Duration = Duration::from_secs(30);
 const RETRY_DELAY: Duration = Duration::from_millis(100);
 const BOOT_DELAY: Duration = Duration::from_millis(750);
 const MAX_ATTEMPTS: usize = 3;
-const MAX_WRITE_PACKET_ATTEMPTS: usize = 3;
+const MAX_WRITE_PACKET_ATTEMPTS: usize = 4;
 
 enum AckStatus {
     Ack,
