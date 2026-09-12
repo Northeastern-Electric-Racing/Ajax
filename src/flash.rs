@@ -190,7 +190,7 @@ impl FirmwareFlashManager {
                 &data[offset..offset + payload_length]
             );
 
-            match self.retry_write_packet(&frame)? {
+            match self.retry_write_packet(sequence, &frame)? {
                 AckStatus::Ack => {}
                 AckStatus::Nack => return Ok(AckStatus::Nack),
                 AckStatus::Timeout => {
@@ -238,13 +238,14 @@ impl FirmwareFlashManager {
 
     fn retry_write_packet(
         &self,
+        sequence: u8,
         frame: &[u8],
     ) -> Result<AckStatus> {
         for attempt in 1..=MAX_WRITE_PACKET_ATTEMPTS {
             self.can.send(self.ecu.write_data_can_id()?, frame)?;
 
-            match self.wait_ack_status(
-                protocol::WRITE_MEMORY,
+            match self.wait_write_packet_ack(
+                sequence,
                 PACKET_TIMEOUT,
             )? {
                 AckStatus::Ack => return Ok(AckStatus::Ack),
@@ -276,6 +277,44 @@ impl FirmwareFlashManager {
         self.can.clear()?;
         self.can.send(self.ecu.request_can_id()?, request)?;
         self.wait_ack(command, timeout)
+    }
+
+    fn wait_write_packet_ack(
+        &self,
+        sequence: u8,
+        timeout: Duration,
+    ) -> Result<AckStatus> {
+        let response_id = self.ecu.response_can_id()?;
+        let deadline = Instant::now() + timeout;
+
+        while Instant::now() < deadline {
+            let remaining =
+                deadline.saturating_duration_since(Instant::now());
+
+            let Some(frame) = self.can.receive(remaining)? else {
+                break;
+            };
+
+            if frame.id != response_id
+                || frame.data.len() < 2
+                || frame.data[1] != protocol::WRITE_MEMORY
+            {
+                continue;
+            }
+
+            if frame.data[0] == protocol::NACK {
+                return Ok(AckStatus::Nack);
+            }
+
+            if frame.data.len() == 3
+                && frame.data[0] == protocol::ACK
+                && frame.data[2] == sequence
+            {
+                return Ok(AckStatus::Ack);
+            }
+        }
+
+        Ok(AckStatus::Timeout)
     }
 
     fn wait_ack(&self, command: u8, timeout: Duration) -> Result<()> {
@@ -311,7 +350,7 @@ impl FirmwareFlashManager {
             };
 
             if frame.id != response_id
-                || frame.data.len() < 2
+                || frame.data.len() != 2
                 || frame.data[1] != command
             {
                 continue;
