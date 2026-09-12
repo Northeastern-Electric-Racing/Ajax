@@ -2,7 +2,7 @@ use crate::{protocol, can::{CanFrame, SocketCan}, types::{BootInfo, EcuDefinitio
 use anyhow::{Context, Result};
 use std::{io::{self, Write}, thread, time::{Duration, Instant}};
 
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const PACKET_TIMEOUT: Duration = Duration::from_millis(500);
 const ERASE_TIMEOUT: Duration = Duration::from_secs(30);
 const RETRY_DELAY: Duration = Duration::from_millis(100);
