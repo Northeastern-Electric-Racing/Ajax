@@ -8,7 +8,7 @@ const ERASE_TIMEOUT: Duration = Duration::from_secs(30);
 const RETRY_DELAY: Duration = Duration::from_millis(100);
 const BOOT_DELAY: Duration = Duration::from_millis(750);
 const MAX_ATTEMPTS: usize = 3;
-const MAX_WRITE_PACKET_ATTEMPTS: usize = 4;
+const MAX_WRITE_ATTEMPTS: usize = 3;
 
 enum AckStatus {
     Ack,
@@ -195,7 +195,7 @@ impl FirmwareFlashManager {
                 AckStatus::Nack => return Ok(AckStatus::Nack),
                 AckStatus::Timeout => {
                     anyhow::bail!(
-                        "write packet sequence {sequence} timed out after                          {MAX_WRITE_PACKET_ATTEMPTS} attempts"
+                        "write packet sequence {sequence} timed out after {MAX_WRITE_ATTEMPTS} attempts"
                     )
                 }
             }
@@ -204,19 +204,19 @@ impl FirmwareFlashManager {
             sequence = sequence.wrapping_add(1);
         }
 
-        match self.wait_ack_status(protocol::WRITE_MEMORY, COMMAND_TIMEOUT)? {
+        match self.retry_final_write_ack(&request)? {
             AckStatus::Ack => Ok(AckStatus::Ack),
             AckStatus::Nack => Ok(AckStatus::Nack),
             AckStatus::Timeout => {
                 anyhow::bail!(
-                    "timed out waiting for final WRITE_MEMORY ACK"
+                    "timed out waiting for final WRITE_MEMORY ACK after {MAX_WRITE_ATTEMPTS} attempts"
                 )
             }
         }
     }
 
     fn retry_write_request(&self, request: &[u8]) -> Result<AckStatus> {
-        for attempt in 1..=MAX_WRITE_PACKET_ATTEMPTS {
+        for attempt in 1..=MAX_WRITE_ATTEMPTS {
             self.can.send(self.ecu.request_can_id()?, request)?;
 
             match self.wait_ack_status(
@@ -226,7 +226,7 @@ impl FirmwareFlashManager {
                 AckStatus::Ack => return Ok(AckStatus::Ack),
                 AckStatus::Nack => return Ok(AckStatus::Nack),
                 AckStatus::Timeout => {
-                    if attempt < MAX_WRITE_PACKET_ATTEMPTS {
+                    if attempt < MAX_WRITE_ATTEMPTS {
                         thread::sleep(RETRY_DELAY);
                     }
                 }
@@ -241,7 +241,7 @@ impl FirmwareFlashManager {
         sequence: u8,
         frame: &[u8],
     ) -> Result<AckStatus> {
-        for attempt in 1..=MAX_WRITE_PACKET_ATTEMPTS {
+        for attempt in 1..=MAX_WRITE_ATTEMPTS {
             self.can.send(self.ecu.write_data_can_id()?, frame)?;
 
             match self.wait_write_packet_ack(
@@ -251,8 +251,25 @@ impl FirmwareFlashManager {
                 AckStatus::Ack => return Ok(AckStatus::Ack),
                 AckStatus::Nack => return Ok(AckStatus::Nack),
                 AckStatus::Timeout => {
-                    if attempt < MAX_WRITE_PACKET_ATTEMPTS {
+                    if attempt < MAX_WRITE_ATTEMPTS {
                         thread::sleep(RETRY_DELAY);
+                    }
+                }
+            }
+        }
+
+        Ok(AckStatus::Timeout)
+    }
+
+    fn retry_final_write_ack(&self, request: &[u8]) -> Result<AckStatus> {
+        for attempt in 1..=MAX_WRITE_ATTEMPTS {
+            match self.wait_ack_status(protocol::WRITE_MEMORY, COMMAND_TIMEOUT)? {
+                AckStatus::Ack => return Ok(AckStatus::Ack),
+                AckStatus::Nack => return Ok(AckStatus::Nack),
+                AckStatus::Timeout => {
+                    if attempt < MAX_WRITE_ATTEMPTS {
+                        thread::sleep(RETRY_DELAY);
+                        self.can.send(self.ecu.request_can_id()?, request)?;
                     }
                 }
             }
