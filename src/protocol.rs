@@ -1,5 +1,5 @@
 pub const ACK: u8 = 0x5A;
-pub const NACK: u8 = 0xA5;
+pub const NACK: u8 = 0xB5;
 
 pub const GET: u8 = 0xA1;
 pub const GET_VERSION: u8 = 0xA2;
