@@ -9,9 +9,8 @@ pub struct Firmware {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct BootInfo {
+pub struct BootStatus {
     pub version: u8,
-    pub bank_swap_enabled: bool,
 }
 
 #[derive(Debug, Deserialize)]

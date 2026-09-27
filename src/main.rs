@@ -36,7 +36,7 @@ struct Cli {
 enum Command {
     /// Ping the bootloader
     Ping,
-    /// Read bootloader version and bank swap state
+    /// Read bootloader version
     Version,
     /// Request application -> bootloader transition, then verify with ping
     EnterBootloader,
@@ -44,7 +44,7 @@ enum Command {
     StartApp,
     /// Change the bootloader CAN bitrate (Linux interface must be reconfigured separately)
     SetBaud { bit_rate: u32 },
-    /// Program, CRC-verify, and bank-swap a firmware image
+    /// Program, CRC-verify, and activate a firmware image
     Flash {
         file: PathBuf,
         #[arg(long)]
@@ -84,19 +84,10 @@ fn run() -> Result<()> {
             println!("{} bootloader responded", ecu.label);
         }
         Command::Version => {
-            let info = flash_manager.get_version()?;
-            let major = info.version >> 4;
-            let minor = info.version & 0x0F;
-
+            let status = flash_manager.get_status()?;
+            let major = status.version >> 4;
+            let minor = status.version & 0x0F;
             println!("Bootloader version: {major}.{minor}");
-            println!(
-                "Bank swap: {}",
-                if info.bank_swap_enabled {
-                    "Enabled"
-                } else {
-                    "Disabled"
-                }
-            );
         }
         Command::EnterBootloader => {
             flash_manager.request_bootloader()?;

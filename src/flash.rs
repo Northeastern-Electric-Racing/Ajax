@@ -1,10 +1,9 @@
-use crate::{protocol, can::{CanFrame, SocketCan}, types::{BootInfo, EcuDefinition, Firmware}};
+use crate::{protocol, can::{CanFrame, SocketCan}, types::{BootStatus, EcuDefinition, Firmware}};
 use anyhow::{Context, Result};
 use std::{io::{self, Write}, thread, time::{Duration, Instant}};
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const PACKET_TIMEOUT: Duration = Duration::from_millis(500);
-const ERASE_TIMEOUT: Duration = Duration::from_secs(30);
 const RETRY_DELAY: Duration = Duration::from_millis(100);
 const BOOT_DELAY: Duration = Duration::from_millis(750);
 const MAX_ATTEMPTS: usize = 3;
@@ -26,7 +25,7 @@ impl FirmwareFlashManager {
 
     pub fn ping(&self) -> Result<()> {
         self.retry("ping", || {
-            self.send_command_wait_ack(&[protocol::GET], protocol::GET, COMMAND_TIMEOUT)
+            self.send_command_wait_ack(&[protocol::GET_INFO], protocol::GET_INFO, COMMAND_TIMEOUT)
         })
     }
 
@@ -38,7 +37,7 @@ impl FirmwareFlashManager {
             self.can.send(id, &payload)?;
             thread::sleep(BOOT_DELAY);
 
-            if self.send_command_wait_ack(&[protocol::GET], protocol::GET, COMMAND_TIMEOUT).is_ok() {
+            if self.send_command_wait_ack(&[protocol::GET_INFO], protocol::GET_INFO, COMMAND_TIMEOUT).is_ok() {
                 return Ok(());
             }
 
@@ -50,14 +49,12 @@ impl FirmwareFlashManager {
         anyhow::bail!("failed to enter bootloader after {MAX_ATTEMPTS} attempts")
     }
 
-    pub fn get_version(&self) -> Result<BootInfo> {
-        self.retry("get-version", || self.get_version_once())
+    pub fn get_status(&self) -> Result<BootStatus> {
+        self.retry("get-status", || self.get_status_once())
     }
 
     pub fn start_application(&self) -> Result<()> {
-        let mut request = vec![protocol::GO];
-        request.extend_from_slice(&protocol::LOGICAL_APPLICATION_ADDRESS.to_be_bytes());
-        self.send_command_wait_ack(&request, protocol::GO, COMMAND_TIMEOUT)
+        self.send_command_wait_ack(&[protocol::START_APP], protocol::START_APP, COMMAND_TIMEOUT)
     }
 
     pub fn change_baud_rate(&self, bit_rate: u32) -> Result<()> {
@@ -72,24 +69,20 @@ impl FirmwareFlashManager {
         }
 
         print_progress(3.0, "Detecting bootloader", None)?;
-        let _info = self.get_version()?;
-        let target_address = protocol::INACTIVE_APPLICATION_ADDRESS;
+        let _status = self.get_status()?;
 
         print_progress(5.0, "Starting update", None)?;
         self.retry("start-update", || self.start_update(image))?;
-
-        print_progress(8.0, "Erasing inactive bank", None)?;
-        self.retry("erase", || self.erase())?;
 
         let mut completed = 0usize;
         while completed < image.data.len() {
             let length = protocol::MAXIMUM_WRITE_SIZE.min(image.data.len() - completed);
             let block = &image.data[completed..completed + length];
-            let address = target_address + completed as u32;
-            self.retry_write_block(address, block)?;
+            let offset = completed as u32;
+            self.retry_write_block(offset, block)?;
             completed += length;
 
-            let percent = 10.0 + 80.0 * completed as f64 / image.data.len() as f64;
+            let percent = 8.0 + 84.0 * completed as f64 / image.data.len() as f64;
             let detail = format!("{completed}/{} bytes", image.data.len());
             print_progress(percent, "Programming", Some(&detail))?;
         }
@@ -102,22 +95,21 @@ impl FirmwareFlashManager {
             image.crc32
         );
 
-        print_progress(97.0, "Swapping banks", None)?;
-        self.swap_banks()?;
+        print_progress(97.0, "Activating image", None)?;
+        self.activate()?;
 
         print_progress(100.0, "Complete", None)?;
         println!();
         Ok(())
     }
 
-    fn get_version_once(&self) -> Result<BootInfo> {
+    fn get_status_once(&self) -> Result<BootStatus> {
         self.can.clear()?;
-        self.can.send(self.ecu.request_can_id()?, &[protocol::GET_VERSION])?;
-        self.wait_ack(protocol::GET_VERSION, COMMAND_TIMEOUT)?;
-        let response = self.wait_response(protocol::GET_VERSION, 4, COMMAND_TIMEOUT)?;
-        Ok(BootInfo {
+        self.can.send(self.ecu.request_can_id()?, &[protocol::GET_STATUS])?;
+        self.wait_ack(protocol::GET_STATUS, COMMAND_TIMEOUT)?;
+        let response = self.wait_response(protocol::GET_STATUS, 3, COMMAND_TIMEOUT)?;
+        Ok(BootStatus {
             version: response.data[1],
-            bank_swap_enabled: response.data[2] != 0,
         })
     }
 
@@ -137,17 +129,9 @@ impl FirmwareFlashManager {
         self.send_command_wait_ack(&request, protocol::START_UPDATE, COMMAND_TIMEOUT)
     }
 
-    fn erase(&self) -> Result<()> {
-        self.send_command_wait_ack(
-            &[protocol::ERASE_MEMORY, protocol::FIRST_APPLICATION_SECTOR, protocol::APPLICATION_SECTOR_COUNT],
-            protocol::ERASE_MEMORY,
-            ERASE_TIMEOUT,
-        )
-    }
-
-    fn retry_write_block(&self, address: u32, data: &[u8]) -> Result<()> {
+    fn retry_write_block(&self, offset: u32, data: &[u8]) -> Result<()> {
         for attempt in 1..=MAX_ATTEMPTS {
-            match self.write_block(address, data)? {
+            match self.write_block(offset, data)? {
                 AckStatus::Ack => return Ok(()),
                 AckStatus::Nack => {
                     if attempt < MAX_ATTEMPTS {
@@ -165,7 +149,7 @@ impl FirmwareFlashManager {
         )
     }
 
-    fn write_block(&self, address: u32, data: &[u8]) -> Result<AckStatus> {
+    fn write_block(&self, offset: u32, data: &[u8]) -> Result<AckStatus> {
         anyhow::ensure!(
             data.len() <= protocol::MAXIMUM_WRITE_SIZE,
             "write block too large"
@@ -174,7 +158,7 @@ impl FirmwareFlashManager {
         let length = u16::try_from(data.len())?;
         let mut request = [0u8; 7];
         request[0] = protocol::WRITE_MEMORY;
-        request[1..5].copy_from_slice(&address.to_be_bytes());
+        request[1..5].copy_from_slice(&offset.to_be_bytes());
         request[5..7].copy_from_slice(&length.to_be_bytes());
 
         self.can.clear()?;
@@ -298,8 +282,8 @@ impl FirmwareFlashManager {
         Ok(u32::from_be_bytes(response.data[1..5].try_into().unwrap()))
     }
 
-    fn swap_banks(&self) -> Result<()> {
-        self.send_command_wait_ack(&[protocol::BANK_SWAP], protocol::BANK_SWAP, COMMAND_TIMEOUT)
+    fn activate(&self) -> Result<()> {
+        self.send_command_wait_ack(&[protocol::ACTIVATE], protocol::ACTIVATE, COMMAND_TIMEOUT)
     }
 
     fn send_command_wait_ack(&self, request: &[u8], command: u8, timeout: Duration) -> Result<()> {

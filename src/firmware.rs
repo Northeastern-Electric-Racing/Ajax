@@ -151,7 +151,7 @@ fn validate(firmware: &Firmware) -> Result<()> {
     let stack_pointer = u32::from_le_bytes(firmware.data[0..4].try_into().unwrap());
     let reset_handler = u32::from_le_bytes(firmware.data[4..8].try_into().unwrap());
     let reset_address = reset_handler & !1;
-    let stack_valid = (0x2000_0000..=0x2009_FFF0).contains(&stack_pointer);
+    let stack_valid = (0x2000_0000..=0x200A_0000).contains(&stack_pointer) && stack_pointer % 8 == 0;
     let reset_valid = (reset_handler & 1) != 0
         && reset_address >= protocol::LOGICAL_APPLICATION_ADDRESS
         && reset_address < protocol::LOGICAL_APPLICATION_ADDRESS + protocol::MAXIMUM_IMAGE_SIZE as u32;
