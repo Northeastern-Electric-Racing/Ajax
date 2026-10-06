@@ -63,15 +63,26 @@ impl FirmwareFlashManager {
     }
 
     pub fn flash(&self, image: &Firmware, already_in_bootloader: bool) -> Result<()> {
+        self.flash_with_progress(image, already_in_bootloader, print_progress)?;
+        println!();
+        Ok(())
+    }
+
+    pub fn flash_with_progress(
+        &self,
+        image: &Firmware,
+        already_in_bootloader: bool,
+        mut progress: impl FnMut(f64, &str, Option<&str>) -> Result<()>,
+    ) -> Result<()> {
         if !already_in_bootloader {
-            print_progress(1.0, "Entering bootloader", None)?;
+            progress(1.0, "Entering bootloader", None)?;
             self.request_bootloader()?;
         }
 
-        print_progress(3.0, "Detecting bootloader", None)?;
+        progress(3.0, "Detecting bootloader", None)?;
         let _status = self.get_status()?;
 
-        print_progress(5.0, "Starting update", None)?;
+        progress(5.0, "Starting update", None)?;
         self.retry("start-update", || self.start_update(image))?;
 
         let mut completed = 0usize;
@@ -84,10 +95,10 @@ impl FirmwareFlashManager {
 
             let percent = 8.0 + 84.0 * completed as f64 / image.data.len() as f64;
             let detail = format!("{completed}/{} bytes", image.data.len());
-            print_progress(percent, "Programming", Some(&detail))?;
+            progress(percent, "Programming", Some(&detail))?;
         }
 
-        print_progress(92.0, "Verifying CRC", None)?;
+        progress(92.0, "Verifying CRC", None)?;
         let returned_crc = self.retry("compute-crc", || self.verify())?;
         anyhow::ensure!(
             returned_crc == image.crc32,
@@ -95,11 +106,10 @@ impl FirmwareFlashManager {
             image.crc32
         );
 
-        print_progress(97.0, "Activating image", None)?;
+        progress(97.0, "Activating image", None)?;
         self.activate()?;
 
-        print_progress(100.0, "Complete", None)?;
-        println!();
+        progress(100.0, "Complete", None)?;
         Ok(())
     }
 

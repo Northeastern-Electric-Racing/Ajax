@@ -15,60 +15,94 @@ pub struct BootStatus {
 
 #[derive(Debug, Deserialize)]
 pub struct ConfigFile {
-    #[serde(rename = "supportedBitRates")]
+    pub schema_version: u32,
     pub supported_bit_rates: Vec<u32>,
-    pub ecus: Vec<EcuDefinition>,
+    pub ecus: std::collections::BTreeMap<String, EcuDefinition>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct EcuDefinition {
-    pub name: String,
     pub label: String,
-    #[serde(rename = "requestId")]
-    pub request_id: String,
-    #[serde(rename = "responseId")]
-    pub response_id: String,
-    #[serde(rename = "writeDataId")]
-    pub write_data_id: String,
-    #[serde(rename = "applicationBootRequestId")]
-    pub application_boot_request_id: String,
-    #[serde(rename = "applicationBootRequestData")]
-    pub application_boot_request_data: String,
+    pub can: CanConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CanConfig {
+    pub default_bit_rate: u32,
+    #[serde(deserialize_with = "unsigned")]
+    pub request_id: u16,
+    #[serde(deserialize_with = "unsigned")]
+    pub response_id: u16,
+    #[serde(deserialize_with = "unsigned")]
+    pub write_data_id: u16,
+    #[serde(deserialize_with = "unsigned")]
+    pub application_boot_request_id: u16,
+    #[serde(deserialize_with = "bytes")]
+    pub application_boot_request_data: Vec<u8>,
 }
 
 impl EcuDefinition {
     pub fn request_can_id(&self) -> anyhow::Result<u32> {
-        parse_u32(&self.request_id)
+        Ok(u32::from(self.can.request_id))
     }
 
     pub fn response_can_id(&self) -> anyhow::Result<u32> {
-        parse_u32(&self.response_id)
+        Ok(u32::from(self.can.response_id))
     }
 
     pub fn write_data_can_id(&self) -> anyhow::Result<u32> {
-        parse_u32(&self.write_data_id)
+        Ok(u32::from(self.can.write_data_id))
     }
 
     pub fn boot_request_can_id(&self) -> anyhow::Result<u32> {
-        parse_u32(&self.application_boot_request_id)
+        Ok(u32::from(self.can.application_boot_request_id))
     }
 
     pub fn boot_request_payload(&self) -> anyhow::Result<Vec<u8>> {
-        let mut out = Vec::new();
-        for token in self.application_boot_request_data.split_whitespace() {
-            let value = u8::from_str_radix(token.trim_start_matches("0x"), 16)?;
-            out.push(value);
-        }
-        anyhow::ensure!(!out.is_empty() && out.len() <= 8, "boot request must contain 1..8 bytes");
-        Ok(out)
+        Ok(self.can.application_boot_request_data.clone())
     }
 }
 
-fn parse_u32(text: &str) -> anyhow::Result<u32> {
-    let text = text.trim();
-    if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-        Ok(u32::from_str_radix(hex, 16)?)
-    } else {
-        Ok(text.parse::<u32>()?)
+// Match Atlas: decimal JSON numbers or quoted hexadecimal values with a 0x prefix.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Unsigned {
+    Decimal(u64),
+    Hex(String),
+}
+
+impl Unsigned {
+    fn value<T: TryFrom<u64>>(self) -> Result<T, String> {
+        let value = match self {
+            Self::Decimal(value) => value,
+            Self::Hex(text) => {
+                let digits = text
+                    .strip_prefix("0x")
+                    .or_else(|| text.strip_prefix("0X"))
+                    .ok_or_else(|| format!("Hex value needs a 0x prefix: {text}"))?;
+                if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err(format!("Invalid hex value: {text}"));
+                }
+                u64::from_str_radix(digits, 16)
+                    .map_err(|_| format!("Hex value overflows: {text}"))?
+            }
+        };
+        T::try_from(value).map_err(|_| format!("Value {value:#x} exceeds field range"))
     }
+}
+
+fn unsigned<'de, D: serde::Deserializer<'de>, T: TryFrom<u64>>(
+    deserializer: D,
+) -> Result<T, D::Error> {
+    Unsigned::deserialize(deserializer)?
+        .value()
+        .map_err(serde::de::Error::custom)
+}
+
+fn bytes<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+    Vec::<Unsigned>::deserialize(deserializer)?
+        .into_iter()
+        .map(|value| value.value().map_err(serde::de::Error::custom))
+        .collect()
 }

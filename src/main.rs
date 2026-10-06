@@ -1,20 +1,24 @@
 #![deny(warnings)]
 
+mod can;
 mod config;
 mod firmware;
 mod flash;
 mod protocol;
-mod can;
+mod server;
 mod types;
 
 use anyhow::{Context, Result};
+use can::SocketCan;
 use clap::{Parser, Subcommand};
 use flash::FirmwareFlashManager;
-use can::SocketCan;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "ajax", about = "Firmware update application for vehicle ECUs over CAN")]
+#[command(
+    name = "ajax",
+    about = "Firmware update application for vehicle ECUs over CAN"
+)]
 struct Cli {
     /// CAN interface.
     #[arg(long, global = true, default_value = "can0")]
@@ -26,7 +30,7 @@ struct Cli {
 
     /// ECU name from config (for example BMS or VCU)
     #[arg(long)]
-    ecu: String,
+    ecu: Option<String>,
 
     #[command(subcommand)]
     command: Command,
@@ -34,6 +38,8 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Serve CAN flashing requests over HTTP.
+    Serve,
     /// Ping the bootloader
     Ping,
     /// Read bootloader version
@@ -62,26 +68,39 @@ fn main() {
 fn run() -> Result<()> {
     let cli = Cli::parse();
 
-    let executable_path = std::env::current_exe()
-        .context("failed to determine executable path")?;
+    let executable_path = std::env::current_exe().context("failed to determine executable path")?;
     let executable_directory = executable_path
         .parent()
         .context("failed to determine executable directory")?;
-    let config_path = cli.config.unwrap_or_else(|| executable_directory.join("ecus.json"));
+    let config_path = cli
+        .config
+        .unwrap_or_else(|| executable_directory.join("ecus.json"));
 
     let config_file = config::load(&config_path)?;
-    let ecu = config::select_ecu(&config_file, &cli.ecu)?;
-
     let interface = cli.interface;
+    if let Command::Serve = &cli.command {
+        anyhow::ensure!(
+            cli.ecu.is_none(),
+            "serve selects the ECU from each upload; omit --ecu"
+        );
+        return server::run(config_file, interface);
+    }
+    let ecu_name = cli
+        .ecu
+        .as_deref()
+        .context("--ecu is required for CAN commands")?;
+    let ecu = config::select_ecu(&config_file, ecu_name)?;
+    let ecu_display = ecu_name.to_ascii_uppercase();
 
     let can = SocketCan::open(&interface)
         .with_context(|| format!("failed to open CAN interface {interface}"))?;
     let flash_manager = FirmwareFlashManager::new(can, ecu.clone());
 
     match cli.command {
+        Command::Serve => unreachable!("server was started before opening CAN"),
         Command::Ping => {
             flash_manager.ping()?;
-            println!("{} bootloader responded", ecu.label);
+            println!("{ecu_display} bootloader responded");
         }
         Command::Version => {
             let status = flash_manager.get_status()?;
@@ -91,7 +110,7 @@ fn run() -> Result<()> {
         }
         Command::EnterBootloader => {
             flash_manager.request_bootloader()?;
-            println!("{} entered bootloader", ecu.label);
+            println!("{ecu_display} entered bootloader");
         }
         Command::StartApp => {
             flash_manager.start_application()?;
@@ -111,6 +130,7 @@ fn run() -> Result<()> {
             already_in_bootloader,
         } => {
             let image = firmware::load(&file)?;
+            println!("{ecu_display} flash request received");
             println!("Firmware: {}", file.display());
             println!("Format:   {}", image.format);
             println!("Address:  0x{:08X}", image.address);
