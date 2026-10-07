@@ -17,7 +17,7 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(
     name = "ajax",
-    about = "Firmware update application for vehicle ECUs over CAN"
+    about = "Firmware update application for vehicle ECUs over CAN. Starts the HTTP server when no command is supplied."
 )]
 struct Cli {
     /// CAN interface.
@@ -33,13 +33,11 @@ struct Cli {
     ecu: Option<String>,
 
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Serve CAN flashing requests over HTTP.
-    Serve,
     /// Ping the bootloader
     Ping,
     /// Read bootloader version
@@ -78,13 +76,13 @@ fn run() -> Result<()> {
 
     let config_file = config::load(&config_path)?;
     let interface = cli.interface;
-    if let Command::Serve = &cli.command {
+    let Some(command) = cli.command else {
         anyhow::ensure!(
             cli.ecu.is_none(),
-            "serve selects the ECU from each upload; omit --ecu"
+            "server mode selects the ECU from each upload; omit --ecu or specify a CAN command"
         );
         return server::run(config_file, interface);
-    }
+    };
     let ecu_name = cli
         .ecu
         .as_deref()
@@ -96,8 +94,7 @@ fn run() -> Result<()> {
         .with_context(|| format!("failed to open CAN interface {interface}"))?;
     let flash_manager = FirmwareFlashManager::new(can, ecu.clone());
 
-    match cli.command {
-        Command::Serve => unreachable!("server was started before opening CAN"),
+    match command {
         Command::Ping => {
             flash_manager.ping()?;
             println!("{ecu_display} bootloader responded");
