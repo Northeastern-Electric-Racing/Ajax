@@ -20,22 +20,23 @@ pub fn load(path: &Path) -> Result<ConfigFile> {
                 .all(|rate| matches!(rate, 125_000 | 250_000 | 500_000 | 1_000_000)),
         "supported_bit_rates must contain supported CAN rates"
     );
+    ensure!(
+        config
+            .supported_bit_rates
+            .contains(&config.can_line_bitrate),
+        "unsupported can_line_bitrate"
+    );
     let mut ids = HashSet::new();
     for (name, ecu) in &config.ecus {
         ensure!(
             !name.is_empty()
-                && name
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'),
-            "invalid ECU name {name}; use lowercase letters, digits, or hyphens"
+                && name.bytes().all(|b| b.is_ascii_lowercase()
+                    || b.is_ascii_digit()
+                    || b == b'-'
+                    || b == b'_'),
+            "invalid ECU name {name}; use lowercase letters, digits, hyphens, or underscores"
         );
         ensure!(!ecu.label.trim().is_empty(), "missing label for {name}");
-        ensure!(
-            config
-                .supported_bit_rates
-                .contains(&ecu.can.default_bit_rate),
-            "unsupported default_bit_rate for {name}"
-        );
         ensure!(
             (1..=8).contains(&ecu.can.application_boot_request_data.len()),
             "boot request for {name} must contain 1..8 bytes"

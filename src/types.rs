@@ -16,6 +16,7 @@ pub struct BootStatus {
 #[derive(Debug, Deserialize)]
 pub struct ConfigFile {
     pub schema_version: u32,
+    pub can_line_bitrate: u32,
     pub supported_bit_rates: Vec<u32>,
     pub ecus: std::collections::BTreeMap<String, EcuDefinition>,
 }
@@ -29,7 +30,6 @@ pub struct EcuDefinition {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CanConfig {
-    pub default_bit_rate: u32,
     #[serde(deserialize_with = "unsigned")]
     pub request_id: u16,
     #[serde(deserialize_with = "unsigned")]

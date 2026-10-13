@@ -247,7 +247,7 @@ mod tests {
     fn reject_invalid_uploads_and_serialize_operations() {
         tokio::runtime::Runtime::new().unwrap().block_on(async {
             let server = Arc::new(Server {
-                config: ConfigFile { schema_version: 1, supported_bit_rates: vec![500_000], ecus: Default::default() },
+                config: ConfigFile { schema_version: 1, can_line_bitrate: 500_000, supported_bit_rates: vec![500_000], ecus: Default::default() },
                 interface: "nonexistent-test-interface".into(),
                 operation: Arc::new(Semaphore::new(1)),
             });
