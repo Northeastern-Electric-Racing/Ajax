@@ -1,12 +1,11 @@
 use anyhow::{Context, Result};
 use socketcan::{
-    CanFrame as SocketCanFrame,
-    CanSocket as RawCanSocket,
-    EmbeddedFrame,
-    Frame,
-    Socket,
+    CanFrame as SocketCanFrame, CanSocket as RawCanSocket, EmbeddedFrame, Frame, Socket,
 };
-use std::{io, time::{Duration, Instant}};
+use std::{
+    io,
+    time::{Duration, Instant},
+};
 
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
@@ -26,10 +25,16 @@ impl SocketCan {
         let socket = RawCanSocket::open(interface)
             .with_context(|| format!("failed to open CAN interface '{interface}'"))?;
 
-        Ok(Self { socket, cancelled: None })
+        Ok(Self {
+            socket,
+            cancelled: None,
+        })
     }
 
-    pub fn with_cancellation(mut self, cancelled: impl Fn() -> bool + Send + Sync + 'static) -> Result<Self> {
+    pub fn with_cancellation(
+        mut self,
+        cancelled: impl Fn() -> bool + Send + Sync + 'static,
+    ) -> Result<Self> {
         // Bound a blocked write so cancellation can release the CAN interface.
         self.socket.set_write_timeout(CANCEL_POLL_INTERVAL)?;
         self.cancelled = Some(Box::new(cancelled));
@@ -46,10 +51,7 @@ impl SocketCan {
 
     pub fn send(&self, id: u32, data: &[u8]) -> Result<()> {
         self.check_cancelled()?;
-        anyhow::ensure!(
-            data.len() <= 8,
-            "Classical CAN payload exceeds 8 bytes"
-        );
+        anyhow::ensure!(data.len() <= 8, "Classical CAN payload exceeds 8 bytes");
 
         let frame = SocketCanFrame::from_raw_id(id, data)
             .ok_or_else(|| anyhow::anyhow!("CAN identifier 0x{id:X} is out of range"))?;
@@ -96,4 +98,3 @@ impl SocketCan {
         Ok(())
     }
 }
-

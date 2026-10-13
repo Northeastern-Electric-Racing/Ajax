@@ -1,6 +1,14 @@
-use crate::{protocol, can::{CanFrame, SocketCan}, types::{BootStatus, EcuDefinition, Firmware}};
+use crate::{
+    can::{CanFrame, SocketCan},
+    protocol,
+    types::{BootStatus, EcuDefinition, Firmware},
+};
 use anyhow::{Context, Result};
-use std::{io::{self, Write}, thread, time::{Duration, Instant}};
+use std::{
+    io::{self, Write},
+    thread,
+    time::{Duration, Instant},
+};
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const PACKET_TIMEOUT: Duration = Duration::from_millis(500);
@@ -21,7 +29,9 @@ pub struct FirmwareFlashManager {
 }
 
 impl FirmwareFlashManager {
-    pub fn new(can: SocketCan, ecu: EcuDefinition) -> Self { Self { can, ecu } }
+    pub fn new(can: SocketCan, ecu: EcuDefinition) -> Self {
+        Self { can, ecu }
+    }
 
     fn wait(&self, duration: Duration) -> Result<()> {
         let deadline = Instant::now() + duration;
@@ -49,7 +59,10 @@ impl FirmwareFlashManager {
             self.can.send(id, &payload)?;
             self.wait(BOOT_DELAY)?;
 
-            if self.send_command_wait_ack(&[protocol::GET_INFO], protocol::GET_INFO, COMMAND_TIMEOUT).is_ok() {
+            if self
+                .send_command_wait_ack(&[protocol::GET_INFO], protocol::GET_INFO, COMMAND_TIMEOUT)
+                .is_ok()
+            {
                 return Ok(());
             }
 
@@ -127,7 +140,8 @@ impl FirmwareFlashManager {
 
     fn get_status_once(&self) -> Result<BootStatus> {
         self.can.clear()?;
-        self.can.send(self.ecu.request_can_id()?, &[protocol::GET_STATUS])?;
+        self.can
+            .send(self.ecu.request_can_id()?, &[protocol::GET_STATUS])?;
         self.wait_ack(protocol::GET_STATUS, COMMAND_TIMEOUT)?;
         let response = self.wait_response(protocol::GET_STATUS, 3, COMMAND_TIMEOUT)?;
         Ok(BootStatus {
@@ -136,7 +150,10 @@ impl FirmwareFlashManager {
     }
 
     fn start_update(&self, image: &Firmware) -> Result<()> {
-        anyhow::ensure!(image.data.len() <= 0xFF_FFFF, "image size exceeds bootloader protocol limit");
+        anyhow::ensure!(
+            image.data.len() <= 0xFF_FFFF,
+            "image size exceeds bootloader protocol limit"
+        );
         let len = image.data.len() as u32;
         let request = [
             protocol::START_UPDATE,
@@ -166,9 +183,7 @@ impl FirmwareFlashManager {
             }
         }
 
-        anyhow::bail!(
-            "write block rejected after {MAX_ATTEMPTS} attempts"
-        )
+        anyhow::bail!("write block rejected after {MAX_ATTEMPTS} attempts")
     }
 
     fn write_block(&self, offset: u32, data: &[u8]) -> Result<AckStatus> {
@@ -189,9 +204,7 @@ impl FirmwareFlashManager {
             AckStatus::Ack => {}
             AckStatus::Nack => return Ok(AckStatus::Nack),
             AckStatus::Timeout => {
-                anyhow::bail!(
-                    "timed out waiting for initial WRITE_MEMORY ACK after retries"
-                )
+                anyhow::bail!("timed out waiting for initial WRITE_MEMORY ACK after retries")
             }
         }
 
@@ -199,14 +212,11 @@ impl FirmwareFlashManager {
         let mut sequence = 0u8;
 
         while offset < data.len() {
-            let payload_length =
-                protocol::WRITE_FRAME_PAYLOAD_SIZE.min(data.len() - offset);
+            let payload_length = protocol::WRITE_FRAME_PAYLOAD_SIZE.min(data.len() - offset);
 
             let mut frame = Vec::with_capacity(payload_length + 1);
             frame.push(sequence);
-            frame.extend_from_slice(
-                &data[offset..offset + payload_length]
-            );
+            frame.extend_from_slice(&data[offset..offset + payload_length]);
 
             match self.retry_write_packet(sequence, &frame)? {
                 AckStatus::Ack => {}
@@ -237,10 +247,7 @@ impl FirmwareFlashManager {
         for attempt in 1..=MAX_WRITE_ATTEMPTS {
             self.can.send(self.ecu.request_can_id()?, request)?;
 
-            match self.wait_ack_status(
-                protocol::WRITE_MEMORY,
-                COMMAND_TIMEOUT,
-            )? {
+            match self.wait_ack_status(protocol::WRITE_MEMORY, COMMAND_TIMEOUT)? {
                 AckStatus::Ack => return Ok(AckStatus::Ack),
                 AckStatus::Nack => return Ok(AckStatus::Nack),
                 AckStatus::Timeout => {
@@ -254,18 +261,11 @@ impl FirmwareFlashManager {
         Ok(AckStatus::Timeout)
     }
 
-    fn retry_write_packet(
-        &self,
-        sequence: u8,
-        frame: &[u8],
-    ) -> Result<AckStatus> {
+    fn retry_write_packet(&self, sequence: u8, frame: &[u8]) -> Result<AckStatus> {
         for attempt in 1..=MAX_WRITE_ATTEMPTS {
             self.can.send(self.ecu.write_data_can_id()?, frame)?;
 
-            match self.wait_write_packet_ack(
-                sequence,
-                PACKET_TIMEOUT,
-            )? {
+            match self.wait_write_packet_ack(sequence, PACKET_TIMEOUT)? {
                 AckStatus::Ack => return Ok(AckStatus::Ack),
                 AckStatus::Nack => return Ok(AckStatus::Nack),
                 AckStatus::Timeout => {
@@ -298,7 +298,8 @@ impl FirmwareFlashManager {
 
     fn verify(&self) -> Result<u32> {
         self.can.clear()?;
-        self.can.send(self.ecu.request_can_id()?, &[protocol::COMPUTE_CRC])?;
+        self.can
+            .send(self.ecu.request_can_id()?, &[protocol::COMPUTE_CRC])?;
         self.wait_ack(protocol::COMPUTE_CRC, COMMAND_TIMEOUT)?;
         let response = self.wait_response(protocol::COMPUTE_CRC, 5, COMMAND_TIMEOUT)?;
         Ok(u32::from_be_bytes(response.data[1..5].try_into().unwrap()))
@@ -314,17 +315,12 @@ impl FirmwareFlashManager {
         self.wait_ack(command, timeout)
     }
 
-    fn wait_write_packet_ack(
-        &self,
-        sequence: u8,
-        timeout: Duration,
-    ) -> Result<AckStatus> {
+    fn wait_write_packet_ack(&self, sequence: u8, timeout: Duration) -> Result<AckStatus> {
         let response_id = self.ecu.response_can_id()?;
         let deadline = Instant::now() + timeout;
 
         while Instant::now() < deadline {
-            let remaining =
-                deadline.saturating_duration_since(Instant::now());
+            let remaining = deadline.saturating_duration_since(Instant::now());
 
             let Some(frame) = self.can.receive(remaining)? else {
                 break;
@@ -341,9 +337,7 @@ impl FirmwareFlashManager {
                 return Ok(AckStatus::Nack);
             }
 
-            if frame.data.len() == 3
-                && frame.data[0] == protocol::ACK
-                && frame.data[2] == sequence
+            if frame.data.len() == 3 && frame.data[0] == protocol::ACK && frame.data[2] == sequence
             {
                 return Ok(AckStatus::Ack);
             }
@@ -356,38 +350,26 @@ impl FirmwareFlashManager {
         match self.wait_ack_status(command, timeout)? {
             AckStatus::Ack => Ok(()),
             AckStatus::Nack => {
-                anyhow::bail!(
-                    "bootloader rejected command 0x{command:02X}"
-                )
+                anyhow::bail!("bootloader rejected command 0x{command:02X}")
             }
             AckStatus::Timeout => {
-                anyhow::bail!(
-                    "timed out waiting for ACK to command 0x{command:02X}"
-                )
+                anyhow::bail!("timed out waiting for ACK to command 0x{command:02X}")
             }
         }
     }
 
-    fn wait_ack_status(
-        &self,
-        command: u8,
-        timeout: Duration,
-    ) -> Result<AckStatus> {
+    fn wait_ack_status(&self, command: u8, timeout: Duration) -> Result<AckStatus> {
         let response_id = self.ecu.response_can_id()?;
         let deadline = Instant::now() + timeout;
 
         while Instant::now() < deadline {
-            let remaining =
-                deadline.saturating_duration_since(Instant::now());
+            let remaining = deadline.saturating_duration_since(Instant::now());
 
             let Some(frame) = self.can.receive(remaining)? else {
                 break;
             };
 
-            if frame.id != response_id
-                || frame.data.len() != 2
-                || frame.data[1] != command
-            {
+            if frame.id != response_id || frame.data.len() != 2 || frame.data[1] != command {
                 continue;
             }
 
@@ -401,13 +383,23 @@ impl FirmwareFlashManager {
         Ok(AckStatus::Timeout)
     }
 
-    fn wait_response(&self, command: u8, minimum_length: usize, timeout: Duration) -> Result<CanFrame> {
+    fn wait_response(
+        &self,
+        command: u8,
+        minimum_length: usize,
+        timeout: Duration,
+    ) -> Result<CanFrame> {
         let response_id = self.ecu.response_can_id()?;
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            let Some(frame) = self.can.receive(remaining)? else { break; };
-            if frame.id == response_id && frame.data.len() >= minimum_length && frame.data[0] == command {
+            let Some(frame) = self.can.receive(remaining)? else {
+                break;
+            };
+            if frame.id == response_id
+                && frame.data.len() >= minimum_length
+                && frame.data[0] == command
+            {
                 return Ok(frame);
             }
         }
@@ -415,7 +407,9 @@ impl FirmwareFlashManager {
     }
 
     fn retry<T, F>(&self, name: &str, mut operation: F) -> Result<T>
-    where F: FnMut() -> Result<T> {
+    where
+        F: FnMut() -> Result<T>,
+    {
         let mut last = None;
         for attempt in 1..=MAX_ATTEMPTS {
             self.can.check_cancelled()?;
@@ -445,7 +439,8 @@ fn print_progress(percent: f64, stage: &str, detail: Option<&str>) -> Result<()>
         Some(detail) => print!("\r\x1b[2K[{bar}] {percent:5.1}%  {stage:<20} {detail}"),
         None => print!("\r\x1b[2K[{bar}] {percent:5.1}%  {stage}"),
     }
-    io::stdout().flush().context("failed to update progress display")?;
+    io::stdout()
+        .flush()
+        .context("failed to update progress display")?;
     Ok(())
 }
-
