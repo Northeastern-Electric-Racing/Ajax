@@ -169,9 +169,11 @@ async fn flash(
             "address": image.address, "size": image.data.len(), "crc32": image.crc32
         }),
     );
-    // The worker retains CAN ownership even when the HTTP client disconnects.
+    // Keep CAN ownership until the worker stops, including on client disconnect.
     let worker = tokio::task::spawn_blocking(move || {
         let _permit = permit;
+        let cancellation_sender = progress_sender.clone();
+        let can = can.with_cancellation(move || cancellation_sender.is_closed())?;
         FirmwareFlashManager::new(can, ecu).flash_with_progress(
             &image,
             upload.already_in_bootloader,
@@ -201,6 +203,7 @@ async fn flash(
             }
             Err(error) => {
                 let message = format!("Flash failed: {error:#}");
+                eprintln!("{name}: {message}");
                 send_event(
                     &sender,
                     serde_json::json!({"type": "error", "message": message}),
@@ -220,7 +223,7 @@ async fn flash(
 }
 
 fn send_event(sender: &mpsc::UnboundedSender<Bytes>, event: serde_json::Value) {
-    // Losing the progress consumer must not abort an ECU update.
+    // The worker checks whether the receiver closed before further CAN operations.
     let _ = sender.send(Bytes::from(format!("{event}\n")));
 }
 

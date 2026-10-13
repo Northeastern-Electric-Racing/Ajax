@@ -23,6 +23,18 @@ pub struct FirmwareFlashManager {
 impl FirmwareFlashManager {
     pub fn new(can: SocketCan, ecu: EcuDefinition) -> Self { Self { can, ecu } }
 
+    fn wait(&self, duration: Duration) -> Result<()> {
+        let deadline = Instant::now() + duration;
+        loop {
+            self.can.check_cancelled()?;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(());
+            }
+            thread::sleep(remaining.min(Duration::from_millis(50)));
+        }
+    }
+
     pub fn ping(&self) -> Result<()> {
         self.retry("ping", || {
             self.send_command_wait_ack(&[protocol::GET_INFO], protocol::GET_INFO, COMMAND_TIMEOUT)
@@ -35,14 +47,14 @@ impl FirmwareFlashManager {
 
         for attempt in 1..=MAX_ATTEMPTS {
             self.can.send(id, &payload)?;
-            thread::sleep(BOOT_DELAY);
+            self.wait(BOOT_DELAY)?;
 
             if self.send_command_wait_ack(&[protocol::GET_INFO], protocol::GET_INFO, COMMAND_TIMEOUT).is_ok() {
                 return Ok(());
             }
 
             if attempt < MAX_ATTEMPTS {
-                thread::sleep(RETRY_DELAY);
+                self.wait(RETRY_DELAY)?;
             }
         }
 
@@ -145,7 +157,7 @@ impl FirmwareFlashManager {
                 AckStatus::Ack => return Ok(()),
                 AckStatus::Nack => {
                     if attempt < MAX_ATTEMPTS {
-                        thread::sleep(RETRY_DELAY);
+                        self.wait(RETRY_DELAY)?;
                     }
                 }
                 AckStatus::Timeout => {
@@ -233,7 +245,7 @@ impl FirmwareFlashManager {
                 AckStatus::Nack => return Ok(AckStatus::Nack),
                 AckStatus::Timeout => {
                     if attempt < MAX_WRITE_ATTEMPTS {
-                        thread::sleep(RETRY_DELAY);
+                        self.wait(RETRY_DELAY)?;
                     }
                 }
             }
@@ -258,7 +270,7 @@ impl FirmwareFlashManager {
                 AckStatus::Nack => return Ok(AckStatus::Nack),
                 AckStatus::Timeout => {
                     if attempt < MAX_WRITE_ATTEMPTS {
-                        thread::sleep(RETRY_DELAY);
+                        self.wait(RETRY_DELAY)?;
                     }
                 }
             }
@@ -274,7 +286,7 @@ impl FirmwareFlashManager {
                 AckStatus::Nack => return Ok(AckStatus::Nack),
                 AckStatus::Timeout => {
                     if attempt < MAX_WRITE_ATTEMPTS {
-                        thread::sleep(RETRY_DELAY);
+                        self.wait(RETRY_DELAY)?;
                         self.can.send(self.ecu.request_can_id()?, request)?;
                     }
                 }
@@ -406,12 +418,13 @@ impl FirmwareFlashManager {
     where F: FnMut() -> Result<T> {
         let mut last = None;
         for attempt in 1..=MAX_ATTEMPTS {
+            self.can.check_cancelled()?;
             match operation() {
                 Ok(value) => return Ok(value),
                 Err(error) => {
                     last = Some(error);
                     if attempt < MAX_ATTEMPTS {
-                        thread::sleep(RETRY_DELAY);
+                        self.wait(RETRY_DELAY)?;
                     }
                 }
             }
