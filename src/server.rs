@@ -170,11 +170,12 @@ async fn flash(
         }),
     );
     // Keep CAN ownership until the worker stops, including on client disconnect.
+    let boot_request_data = server.config.application_boot_request_data.clone();
     let worker = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         let cancellation_sender = progress_sender.clone();
         let can = can.with_cancellation(move || cancellation_sender.is_closed())?;
-        FirmwareFlashManager::new(can, ecu).flash_with_progress(
+        FirmwareFlashManager::new(can, ecu, boot_request_data).flash_with_progress(
             &image,
             upload.already_in_bootloader,
             |percent, stage, detail| {
@@ -250,7 +251,7 @@ mod tests {
     fn reject_invalid_uploads_and_serialize_operations() {
         tokio::runtime::Runtime::new().unwrap().block_on(async {
             let server = Arc::new(Server {
-                config: ConfigFile { schema_version: 1, can_line_bitrate: 500_000, supported_bit_rates: vec![500_000], ecus: Default::default() },
+                config: ConfigFile { schema_version: 1, can_line_bitrate: 500_000, application_boot_request_data: vec![0xB0, 0x07, 0x10, 0xAD], ecus: Default::default() },
                 interface: "nonexistent-test-interface".into(),
                 operation: Arc::new(Semaphore::new(1)),
             });

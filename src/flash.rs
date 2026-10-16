@@ -26,11 +26,16 @@ enum AckStatus {
 pub struct FirmwareFlashManager {
     can: SocketCan,
     ecu: EcuDefinition,
+    boot_request_data: Vec<u8>,
 }
 
 impl FirmwareFlashManager {
-    pub fn new(can: SocketCan, ecu: EcuDefinition) -> Self {
-        Self { can, ecu }
+    pub fn new(can: SocketCan, ecu: EcuDefinition, boot_request_data: Vec<u8>) -> Self {
+        Self {
+            can,
+            ecu,
+            boot_request_data,
+        }
     }
 
     fn wait(&self, duration: Duration) -> Result<()> {
@@ -53,10 +58,9 @@ impl FirmwareFlashManager {
 
     pub fn request_bootloader(&self) -> Result<()> {
         let id = self.ecu.boot_request_can_id()?;
-        let payload = self.ecu.boot_request_payload()?;
 
         for attempt in 1..=MAX_ATTEMPTS {
-            self.can.send(id, &payload)?;
+            self.can.send(id, &self.boot_request_data)?;
             self.wait(BOOT_DELAY)?;
 
             if self
@@ -80,11 +84,6 @@ impl FirmwareFlashManager {
 
     pub fn start_application(&self) -> Result<()> {
         self.send_command_wait_ack(&[protocol::START_APP], protocol::START_APP, COMMAND_TIMEOUT)
-    }
-
-    pub fn change_baud_rate(&self, bit_rate: u32) -> Result<()> {
-        let request = [protocol::SET_BAUD_RATE, protocol::baud_rate_code(bit_rate)?];
-        self.send_command_wait_ack(&request, protocol::SET_BAUD_RATE, COMMAND_TIMEOUT)
     }
 
     pub fn flash(&self, image: &Firmware, already_in_bootloader: bool) -> Result<()> {

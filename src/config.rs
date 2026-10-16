@@ -13,18 +13,15 @@ pub fn load(path: &Path) -> Result<ConfigFile> {
     );
     ensure!(!config.ecus.is_empty(), "configuration has no ECUs");
     ensure!(
-        !config.supported_bit_rates.is_empty()
-            && config
-                .supported_bit_rates
-                .iter()
-                .all(|rate| matches!(rate, 125_000 | 250_000 | 500_000 | 1_000_000)),
-        "supported_bit_rates must contain supported CAN rates"
+        matches!(
+            config.can_line_bitrate,
+            125_000 | 250_000 | 500_000 | 1_000_000
+        ),
+        "unsupported can_line_bitrate"
     );
     ensure!(
-        config
-            .supported_bit_rates
-            .contains(&config.can_line_bitrate),
-        "unsupported can_line_bitrate"
+        (1..=8).contains(&config.application_boot_request_data.len()),
+        "application boot request must contain 1..8 bytes"
     );
     let mut ids = HashSet::new();
     for (name, ecu) in &config.ecus {
@@ -37,10 +34,6 @@ pub fn load(path: &Path) -> Result<ConfigFile> {
             "invalid ECU name {name}; use lowercase letters, digits, hyphens, or underscores"
         );
         ensure!(!ecu.label.trim().is_empty(), "missing label for {name}");
-        ensure!(
-            (1..=8).contains(&ecu.can.application_boot_request_data.len()),
-            "boot request for {name} must contain 1..8 bytes"
-        );
         for id in [
             ecu.can.request_id,
             ecu.can.response_id,

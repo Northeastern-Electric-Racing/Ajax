@@ -46,8 +46,6 @@ enum Command {
     EnterBootloader,
     /// Start the logical application image
     StartApp,
-    /// Change the bootloader CAN bitrate (Linux interface must be reconfigured separately)
-    SetBaud { bit_rate: u32 },
     /// Program, CRC-verify, and activate a firmware image
     Flash {
         file: PathBuf,
@@ -92,7 +90,11 @@ fn run() -> Result<()> {
 
     let can = SocketCan::open(&interface)
         .with_context(|| format!("failed to open CAN interface {interface}"))?;
-    let flash_manager = FirmwareFlashManager::new(can, ecu.clone());
+    let flash_manager = FirmwareFlashManager::new(
+        can,
+        ecu.clone(),
+        config_file.application_boot_request_data.clone(),
+    );
 
     match command {
         Command::Ping => {
@@ -112,15 +114,6 @@ fn run() -> Result<()> {
         Command::StartApp => {
             flash_manager.start_application()?;
             println!("start-application command acknowledged");
-        }
-        Command::SetBaud { bit_rate } => {
-            anyhow::ensure!(
-                config_file.supported_bit_rates.contains(&bit_rate),
-                "bitrate {bit_rate} is not listed in config"
-            );
-            flash_manager.change_baud_rate(bit_rate)?;
-            println!("bootloader accepted {bit_rate} bit/s");
-            println!("reconfigure {interface} to the same bitrate before sending more CAN traffic");
         }
         Command::Flash {
             file,

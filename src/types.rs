@@ -17,7 +17,8 @@ pub struct BootStatus {
 pub struct ConfigFile {
     pub schema_version: u32,
     pub can_line_bitrate: u32,
-    pub supported_bit_rates: Vec<u32>,
+    #[serde(deserialize_with = "bytes")]
+    pub application_boot_request_data: Vec<u8>,
     pub ecus: std::collections::BTreeMap<String, EcuDefinition>,
 }
 
@@ -38,8 +39,6 @@ pub struct CanConfig {
     pub write_data_id: u16,
     #[serde(deserialize_with = "unsigned")]
     pub application_boot_request_id: u16,
-    #[serde(deserialize_with = "bytes")]
-    pub application_boot_request_data: Vec<u8>,
 }
 
 impl EcuDefinition {
@@ -57,10 +56,6 @@ impl EcuDefinition {
 
     pub fn boot_request_can_id(&self) -> anyhow::Result<u32> {
         Ok(u32::from(self.can.application_boot_request_id))
-    }
-
-    pub fn boot_request_payload(&self) -> anyhow::Result<Vec<u8>> {
-        Ok(self.can.application_boot_request_data.clone())
     }
 }
 
