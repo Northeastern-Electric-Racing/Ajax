@@ -29,28 +29,28 @@
     "lightning": {
       "label": "Lightning",
       "can": {
-        "request_id": "0x018",
-        "response_id": "0x019",
-        "write_data_id": "0x01A",
-        "application_boot_request_id": "0x01B"
+        "request_id": "0x040",
+        "response_id": "0x041",
+        "write_data_id": "0x042",
+        "application_boot_request_id": "0x043"
       }
     },
     "msb_front": {
       "label": "MSB Front",
       "can": {
-        "request_id": "0x01C",
-        "response_id": "0x01D",
-        "write_data_id": "0x01E",
-        "application_boot_request_id": "0x01F"
+        "request_id": "0x044",
+        "response_id": "0x045",
+        "write_data_id": "0x046",
+        "application_boot_request_id": "0x047"
       }
     },
     "msb_back": {
       "label": "MSB Back",
       "can": {
-        "request_id": "0x020",
-        "response_id": "0x021",
-        "write_data_id": "0x022",
-        "application_boot_request_id": "0x023"
+        "request_id": "0x048",
+        "response_id": "0x049",
+        "write_data_id": "0x04A",
+        "application_boot_request_id": "0x04B"
       }
     }
   }
