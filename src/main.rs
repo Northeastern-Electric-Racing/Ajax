@@ -24,6 +24,10 @@ struct Cli {
     #[arg(long, global = true, default_value = "can0")]
     interface: String,
 
+    /// HTTP server port.
+    #[arg(long, default_value_t = 8083, value_parser = clap::value_parser!(u16).range(1024..))]
+    port: u16,
+
     /// Path to ECU config file.
     #[arg(long, global = true)]
     config: Option<PathBuf>,
@@ -79,7 +83,7 @@ fn run() -> Result<()> {
             cli.ecu.is_none(),
             "server mode selects the ECU from each upload; omit --ecu or specify a CAN command"
         );
-        return server::run(config_file, interface);
+        return server::run(config_file, interface, cli.port);
     };
     let ecu_name = cli
         .ecu

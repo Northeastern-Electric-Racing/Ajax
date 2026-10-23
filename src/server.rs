@@ -31,7 +31,7 @@ struct Server {
     operation: Arc<Semaphore>,
 }
 
-pub fn run(config: ConfigFile, interface: String) -> Result<()> {
+pub fn run(config: ConfigFile, interface: String, port: u16) -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(async {
         let state = Arc::new(Server {
@@ -44,7 +44,8 @@ pub fn run(config: ConfigFile, interface: String) -> Result<()> {
             .route("/status", get(status))
             .layer(DefaultBodyLimit::max(MAX_UPLOAD))
             .with_state(state);
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:8083").await?;
+        let listener =
+            tokio::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, port)).await?;
         println!("Ajax listening on http://{}", listener.local_addr()?);
         axum::serve(listener, app)
             .await
