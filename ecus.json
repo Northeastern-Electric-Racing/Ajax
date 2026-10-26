@@ -14,7 +14,7 @@
         "request_id": "0x010",
         "response_id": "0x011",
         "write_data_id": "0x012",
-        "application_boot_request_id": "0x013"
+        "boot_request_id": "0x013"
       }
     },
     "vcu": {
@@ -23,7 +23,7 @@
         "request_id": "0x014",
         "response_id": "0x015",
         "write_data_id": "0x016",
-        "application_boot_request_id": "0x017"
+        "boot_request_id": "0x017"
       }
     },
     "lightning": {
@@ -32,7 +32,7 @@
         "request_id": "0x040",
         "response_id": "0x041",
         "write_data_id": "0x042",
-        "application_boot_request_id": "0x043"
+        "boot_request_id": "0x043"
       }
     },
     "msb_front": {
@@ -41,7 +41,7 @@
         "request_id": "0x044",
         "response_id": "0x045",
         "write_data_id": "0x046",
-        "application_boot_request_id": "0x047"
+        "boot_request_id": "0x047"
       }
     },
     "msb_back": {
@@ -50,7 +50,7 @@
         "request_id": "0x048",
         "response_id": "0x049",
         "write_data_id": "0x04A",
-        "application_boot_request_id": "0x04B"
+        "boot_request_id": "0x04B"
       }
     }
   }

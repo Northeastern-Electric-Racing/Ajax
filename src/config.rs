@@ -38,7 +38,7 @@ pub fn load(path: &Path) -> Result<ConfigFile> {
             ecu.can.request_id,
             ecu.can.response_id,
             ecu.can.write_data_id,
-            ecu.can.application_boot_request_id,
+            ecu.can.boot_request_id,
         ] {
             ensure!(id <= 0x7ff, "CAN ID {id:#x} for {name} must be 11-bit");
             ensure!(ids.insert(id), "duplicate CAN ID {id:#x} for {name}");

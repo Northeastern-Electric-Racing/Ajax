@@ -38,7 +38,7 @@ pub struct CanConfig {
     #[serde(deserialize_with = "unsigned")]
     pub write_data_id: u16,
     #[serde(deserialize_with = "unsigned")]
-    pub application_boot_request_id: u16,
+    pub boot_request_id: u16,
 }
 
 impl EcuDefinition {
@@ -55,7 +55,7 @@ impl EcuDefinition {
     }
 
     pub fn boot_request_can_id(&self) -> anyhow::Result<u32> {
-        Ok(u32::from(self.can.application_boot_request_id))
+        Ok(u32::from(self.can.boot_request_id))
     }
 }
 
