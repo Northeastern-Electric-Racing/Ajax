@@ -8,8 +8,8 @@ pub fn load(path: &Path) -> Result<ConfigFile> {
     let config: ConfigFile = serde_json::from_str(&text)
         .with_context(|| format!("failed to parse config {}", path.display()))?;
     ensure!(
-        config.schema_version == 1,
-        "unsupported schema_version; expected 1"
+        config.schema_version == 2,
+        "unsupported schema_version; expected 2"
     );
     ensure!(!config.ecus.is_empty(), "configuration has no ECUs");
     ensure!(
@@ -40,8 +40,15 @@ pub fn load(path: &Path) -> Result<ConfigFile> {
             ecu.can.write_data_id,
             ecu.can.boot_request_id,
         ] {
-            ensure!(id <= 0x7ff, "CAN ID {id:#x} for {name} must be 11-bit");
-            ensure!(ids.insert(id), "duplicate CAN ID {id:#x} for {name}");
+            let value = id
+                .to_id()
+                .with_context(|| format!("invalid CAN ID for {name}"))?;
+            ensure!(
+                ids.insert(value),
+                "duplicate CAN ID {:#x} (is_ext={}) for {name}",
+                id.id,
+                id.is_ext
+            );
         }
     }
     Ok(config)

@@ -1,7 +1,5 @@
 use anyhow::{Context, Result};
-use socketcan::{
-    CanFrame as SocketCanFrame, CanSocket as RawCanSocket, EmbeddedFrame, Frame, Socket,
-};
+use socketcan::{CanFrame as SocketCanFrame, CanSocket as RawCanSocket, EmbeddedFrame, Id, Socket};
 use std::{
     io,
     time::{Duration, Instant},
@@ -11,7 +9,7 @@ const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone)]
 pub struct CanFrame {
-    pub id: u32,
+    pub id: Id,
     pub data: Vec<u8>,
 }
 
@@ -49,12 +47,12 @@ impl SocketCan {
         Ok(())
     }
 
-    pub fn send(&self, id: u32, data: &[u8]) -> Result<()> {
+    pub fn send(&self, id: Id, data: &[u8]) -> Result<()> {
         self.check_cancelled()?;
         anyhow::ensure!(data.len() <= 8, "Classical CAN payload exceeds 8 bytes");
 
-        let frame = SocketCanFrame::from_raw_id(id, data)
-            .ok_or_else(|| anyhow::anyhow!("CAN identifier 0x{id:X} is out of range"))?;
+        let frame = SocketCanFrame::new(id, data)
+            .ok_or_else(|| anyhow::anyhow!("could not construct CAN data frame"))?;
 
         self.socket
             .write_frame(&frame)
@@ -79,10 +77,11 @@ impl SocketCan {
 
     fn receive_once(&self, timeout: Duration) -> Result<Option<CanFrame>> {
         match self.socket.read_frame_timeout(timeout) {
-            Ok(frame) => Ok(Some(CanFrame {
-                id: frame.raw_id(),
+            Ok(SocketCanFrame::Data(frame)) => Ok(Some(CanFrame {
+                id: frame.id(),
                 data: frame.data().to_vec(),
             })),
+            Ok(_) => Ok(None),
             Err(error)
                 if error.kind() == io::ErrorKind::WouldBlock
                     || error.kind() == io::ErrorKind::TimedOut =>

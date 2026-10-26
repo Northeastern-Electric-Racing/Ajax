@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use socketcan::{ExtendedId, Id, StandardId};
 
 #[derive(Debug, Clone)]
 pub struct Firmware {
@@ -31,31 +32,55 @@ pub struct EcuDefinition {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CanConfig {
+    pub request_id: CanId,
+    pub response_id: CanId,
+    pub write_data_id: CanId,
+    pub boot_request_id: CanId,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CanId {
     #[serde(deserialize_with = "unsigned")]
-    pub request_id: u16,
-    #[serde(deserialize_with = "unsigned")]
-    pub response_id: u16,
-    #[serde(deserialize_with = "unsigned")]
-    pub write_data_id: u16,
-    #[serde(deserialize_with = "unsigned")]
-    pub boot_request_id: u16,
+    pub id: u32,
+    pub is_ext: bool,
+}
+
+impl CanId {
+    pub fn to_id(self) -> anyhow::Result<Id> {
+        let id = if self.is_ext {
+            ExtendedId::new(self.id).map(Id::Extended)
+        } else {
+            u16::try_from(self.id)
+                .ok()
+                .and_then(StandardId::new)
+                .map(Id::Standard)
+        };
+        id.ok_or_else(|| {
+            anyhow::anyhow!(
+                "CAN ID {:#x} must be {}-bit",
+                self.id,
+                if self.is_ext { 29 } else { 11 }
+            )
+        })
+    }
 }
 
 impl EcuDefinition {
-    pub fn request_can_id(&self) -> anyhow::Result<u32> {
-        Ok(u32::from(self.can.request_id))
+    pub fn request_can_id(&self) -> anyhow::Result<Id> {
+        self.can.request_id.to_id()
     }
 
-    pub fn response_can_id(&self) -> anyhow::Result<u32> {
-        Ok(u32::from(self.can.response_id))
+    pub fn response_can_id(&self) -> anyhow::Result<Id> {
+        self.can.response_id.to_id()
     }
 
-    pub fn write_data_can_id(&self) -> anyhow::Result<u32> {
-        Ok(u32::from(self.can.write_data_id))
+    pub fn write_data_can_id(&self) -> anyhow::Result<Id> {
+        self.can.write_data_id.to_id()
     }
 
-    pub fn boot_request_can_id(&self) -> anyhow::Result<u32> {
-        Ok(u32::from(self.can.boot_request_id))
+    pub fn boot_request_can_id(&self) -> anyhow::Result<Id> {
+        self.can.boot_request_id.to_id()
     }
 }
 
