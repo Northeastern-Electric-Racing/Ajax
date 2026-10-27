@@ -17,16 +17,12 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(
     name = "ajax",
-    about = "Firmware update application for vehicle ECUs over CAN. Starts the HTTP server when no command is supplied."
+    about = "Firmware update application for vehicle ECUs over CAN."
 )]
 struct Cli {
     /// CAN interface.
     #[arg(long, global = true, default_value = "can0")]
     interface: String,
-
-    /// HTTP server port.
-    #[arg(long, default_value_t = 8083, value_parser = clap::value_parser!(u16).range(1024..))]
-    port: u16,
 
     /// Path to ECU config file.
     #[arg(long, global = true)]
@@ -37,11 +33,17 @@ struct Cli {
     ecu: Option<String>,
 
     #[command(subcommand)]
-    command: Option<Command>,
+    command: Command,
 }
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Run the HTTP server for firmware uploads
+    Serve {
+        /// HTTP server port.
+        #[arg(long, default_value_t = 8083, value_parser = clap::value_parser!(u16).range(1024..))]
+        port: u16,
+    },
     /// Ping the bootloader
     Ping,
     /// Read bootloader version
@@ -78,13 +80,14 @@ fn run() -> Result<()> {
 
     let config_file = config::load(&config_path)?;
     let interface = cli.interface;
-    let Some(command) = cli.command else {
+    let command = cli.command;
+    if let Command::Serve { port } = command {
         anyhow::ensure!(
             cli.ecu.is_none(),
-            "server mode selects the ECU from each upload; omit --ecu or specify a CAN command"
+            "server mode selects the ECU from each upload; omit --ecu"
         );
-        return server::run(config_file, interface, cli.port);
-    };
+        return server::run(config_file, interface, port);
+    }
     let ecu_name = cli
         .ecu
         .as_deref()
@@ -101,6 +104,7 @@ fn run() -> Result<()> {
     );
 
     match command {
+        Command::Serve { .. } => unreachable!("server mode returns above"),
         Command::Ping => {
             flash_manager.ping()?;
             println!("{ecu_display} bootloader responded");
