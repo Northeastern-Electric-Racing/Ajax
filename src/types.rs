@@ -20,12 +20,37 @@ pub struct ConfigFile {
     pub can_line_bitrate: u32,
     #[serde(deserialize_with = "bytes")]
     pub application_boot_request_data: Vec<u8>,
+    pub platforms: std::collections::BTreeMap<String, PlatformDefinition>,
     pub ecus: std::collections::BTreeMap<String, EcuDefinition>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlatformDefinition {
+    pub flash: Region,
+    pub ram: Region,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Region {
+    #[serde(deserialize_with = "unsigned")]
+    pub address: u32,
+    #[serde(deserialize_with = "unsigned")]
+    pub size: u32,
+}
+
+impl Region {
+    /// Exclusive end address; `config::load` rejects regions that overflow.
+    pub fn end(self) -> u32 {
+        self.address + self.size
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct EcuDefinition {
     pub label: String,
+    pub platform: String,
     pub can: CanConfig,
 }
 

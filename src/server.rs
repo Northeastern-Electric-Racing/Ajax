@@ -22,7 +22,7 @@ use tokio::sync::{Semaphore, mpsc};
 
 use crate::{can::SocketCan, config, firmware, flash::FirmwareFlashManager, types::ConfigFile};
 
-const MAX_UPLOAD: usize = 32 * 1024 * 1024;
+const MAX_UPLOAD: usize = 64 * 1024 * 1024;
 type ApiError = (StatusCode, String);
 
 struct Server {
@@ -135,12 +135,12 @@ async fn flash(
     let upload = tokio::time::timeout(Duration::from_secs(60), read_upload(multipart))
         .await
         .map_err(|_| (StatusCode::REQUEST_TIMEOUT, "upload timed out".to_owned()))??;
-    let ecu = config::select_ecu(&server.config, &upload.ecu).map_err(bad_request)?;
+    let (ecu, platform) = config::select_ecu(&server.config, &upload.ecu).map_err(bad_request)?;
 
     // Validate before starting the response so input/CAN setup failures keep HTTP error codes.
     let interface = server.interface.clone();
     let (image, can, permit) = tokio::task::spawn_blocking(move || {
-        let image = firmware::load(upload.file.path()).map_err(bad_request)?;
+        let image = firmware::load(upload.file.path(), &platform).map_err(bad_request)?;
         let can = SocketCan::open(&interface).map_err(|e| {
             (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -249,10 +249,10 @@ mod tests {
     use tower::ServiceExt;
 
     #[test]
-    fn reject_invalid_uploads_and_serialize_operations() {
+    fn rejects_invalid_uploads() {
         tokio::runtime::Runtime::new().unwrap().block_on(async {
             let server = Arc::new(Server {
-                config: ConfigFile { schema_version: 2, can_line_bitrate: 500_000, application_boot_request_data: vec![0xB0, 0x07, 0x10, 0xAD], ecus: Default::default() },
+                config: ConfigFile { schema_version: 1, can_line_bitrate: 500_000, application_boot_request_data: vec![0xB0, 0x07, 0x10, 0xAD], platforms: Default::default(), ecus: Default::default() },
                 interface: "nonexistent-test-interface".into(),
                 operation: Arc::new(Semaphore::new(1)),
             });

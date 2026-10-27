@@ -11,6 +11,3 @@ pub const START_UPDATE: u8 = 0xA9;
 
 pub const MAXIMUM_WRITE_SIZE: usize = 256;
 pub const WRITE_FRAME_PAYLOAD_SIZE: usize = 7;
-
-pub const LOGICAL_APPLICATION_ADDRESS: u32 = 0x0802_E000;
-pub const MAXIMUM_IMAGE_SIZE: usize = 0x000D_2000;

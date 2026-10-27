@@ -1,4 +1,4 @@
-use crate::types::{ConfigFile, EcuDefinition};
+use crate::types::{ConfigFile, EcuDefinition, PlatformDefinition};
 use anyhow::{Context, Result, ensure};
 use std::{collections::HashSet, fs, path::Path};
 
@@ -8,9 +8,17 @@ pub fn load(path: &Path) -> Result<ConfigFile> {
     let config: ConfigFile = serde_json::from_str(&text)
         .with_context(|| format!("failed to parse config {}", path.display()))?;
     ensure!(
-        config.schema_version == 2,
-        "unsupported schema_version; expected 2"
+        config.schema_version == 1,
+        "unsupported schema_version; expected 1"
     );
+    for (name, platform) in &config.platforms {
+        for (region, value) in [("flash", platform.flash), ("ram", platform.ram)] {
+            ensure!(
+                value.size > 0 && value.address.checked_add(value.size).is_some(),
+                "invalid {region} region for platform {name}"
+            );
+        }
+    }
     ensure!(!config.ecus.is_empty(), "configuration has no ECUs");
     ensure!(
         matches!(
@@ -34,6 +42,11 @@ pub fn load(path: &Path) -> Result<ConfigFile> {
             "invalid ECU name {name}; use lowercase letters, digits, hyphens, or underscores"
         );
         ensure!(!ecu.label.trim().is_empty(), "missing label for {name}");
+        ensure!(
+            config.platforms.contains_key(&ecu.platform),
+            "unknown platform {} for {name}",
+            ecu.platform
+        );
         for id in [
             ecu.can.request_id,
             ecu.can.response_id,
@@ -54,8 +67,9 @@ pub fn load(path: &Path) -> Result<ConfigFile> {
     Ok(config)
 }
 
-pub fn select_ecu(config: &ConfigFile, name: &str) -> Result<EcuDefinition> {
-    config
+/// Returns the ECU and its platform; `load` guarantees the platform exists.
+pub fn select_ecu(config: &ConfigFile, name: &str) -> Result<(EcuDefinition, PlatformDefinition)> {
+    let ecu = config
         .ecus
         .get(&name.to_ascii_lowercase())
         .cloned()
@@ -64,5 +78,7 @@ pub fn select_ecu(config: &ConfigFile, name: &str) -> Result<EcuDefinition> {
                 "ECU '{name}' not found; choose: {}",
                 config.ecus.keys().cloned().collect::<Vec<_>>().join(", ")
             )
-        })
+        })?;
+    let platform = config.platforms[&ecu.platform];
+    Ok((ecu, platform))
 }

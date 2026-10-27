@@ -1,12 +1,10 @@
-use crate::{protocol, types::Firmware};
+use crate::types::{Firmware, PlatformDefinition};
 use anyhow::{Context, Result};
 use std::{collections::BTreeMap, fs, path::Path};
 
-const FLASH_START: u32 = 0x0800_0000;
-const FLASH_END: u32 = 0x0820_0000;
 const CRC_POLYNOMIAL: u32 = 0x04C1_1DB7;
 
-pub fn load(path: &Path) -> Result<Firmware> {
+pub fn load(path: &Path, platform: &PlatformDefinition) -> Result<Firmware> {
     let extension = path
         .extension()
         .and_then(|s| s.to_str())
@@ -14,16 +12,16 @@ pub fn load(path: &Path) -> Result<Firmware> {
         .to_ascii_lowercase();
 
     let firmware = match extension.as_str() {
-        "bin" => load_bin(path)?,
-        "hex" | "ihex" => create_mapped(path, "HEX", load_hex(path)?)?,
-        "elf" | "axf" => create_mapped(path, "ELF", load_elf(path)?)?,
-        _ if has_elf_magic(path)? => create_mapped(path, "ELF", load_elf(path)?)?,
+        "bin" => load_bin(path, platform)?,
+        "hex" | "ihex" => create_mapped(platform, "HEX", load_hex(path)?)?,
+        "elf" | "axf" => create_mapped(platform, "ELF", load_elf(path, platform)?)?,
+        _ if has_elf_magic(path)? => create_mapped(platform, "ELF", load_elf(path, platform)?)?,
         _ => anyhow::bail!(
             "unsupported firmware format; expected .bin, .hex, .ihex, .elf, .axf, or an extensionless ELF binary"
         ),
     };
 
-    validate(&firmware)?;
+    validate(&firmware, platform)?;
     Ok(firmware)
 }
 
@@ -40,13 +38,13 @@ fn has_elf_magic(path: &Path) -> Result<bool> {
     Ok(bytes_read == magic.len() && magic == *b"\x7FELF")
 }
 
-fn load_bin(path: &Path) -> Result<Firmware> {
+fn load_bin(path: &Path, platform: &PlatformDefinition) -> Result<Firmware> {
     let data = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     anyhow::ensure!(!data.is_empty(), "BIN file is empty");
     Ok(Firmware {
         crc32: crc32_stm32(&data),
         data,
-        address: protocol::LOGICAL_APPLICATION_ADDRESS,
+        address: platform.flash.address,
         format: "BIN",
     })
 }
@@ -113,7 +111,7 @@ fn load_hex(path: &Path) -> Result<BTreeMap<u32, u8>> {
     Ok(memory)
 }
 
-fn load_elf(path: &Path) -> Result<BTreeMap<u32, u8>> {
+fn load_elf(path: &Path, platform: &PlatformDefinition) -> Result<BTreeMap<u32, u8>> {
     let elf = fs::read(path)?;
     anyhow::ensure!(elf.len() >= 52, "ELF file is too short");
     anyhow::ensure!(&elf[0..4] == b"\x7FELF", "invalid ELF magic");
@@ -150,9 +148,15 @@ fn load_elf(path: &Path) -> Result<BTreeMap<u32, u8>> {
             virtual_address
         };
 
-        if file_size == 0 || !(FLASH_START..FLASH_END).contains(&address) {
+        // RAM-only segments are not flashed; everything else must fit the flash region.
+        if file_size == 0 || (platform.ram.address..platform.ram.end()).contains(&address) {
             continue;
         }
+        anyhow::ensure!(
+            address >= platform.flash.address
+                && (address as u64 + file_size as u64) <= platform.flash.end() as u64,
+            "ELF segment at 0x{address:08X} is outside the flash region"
+        );
         anyhow::ensure!(
             file_offset + file_size <= elf.len(),
             "ELF loadable segment outside file"
@@ -166,7 +170,7 @@ fn load_elf(path: &Path) -> Result<BTreeMap<u32, u8>> {
 }
 
 fn create_mapped(
-    _path: &Path,
+    platform: &PlatformDefinition,
     format: &'static str,
     memory: BTreeMap<u32, u8>,
 ) -> Result<Firmware> {
@@ -176,9 +180,14 @@ fn create_mapped(
         .ok_or_else(|| anyhow::anyhow!("firmware contains no flash data"))?;
     let last = *memory.keys().next_back().unwrap();
     anyhow::ensure!(
-        first == protocol::LOGICAL_APPLICATION_ADDRESS,
+        first == platform.flash.address,
         "firmware starts at 0x{first:08X}; expected 0x{:08X}",
-        protocol::LOGICAL_APPLICATION_ADDRESS
+        platform.flash.address
+    );
+    // Check before allocating the flat image.
+    anyhow::ensure!(
+        last < platform.flash.end(),
+        "firmware is larger than the flash region"
     );
 
     let mut data = vec![0xFFu8; (last - first + 1) as usize];
@@ -193,32 +202,30 @@ fn create_mapped(
     })
 }
 
-fn validate(firmware: &Firmware) -> Result<()> {
+fn validate(firmware: &Firmware, platform: &PlatformDefinition) -> Result<()> {
     anyhow::ensure!(
         firmware.data.len() >= 8,
         "firmware does not contain a complete vector table"
     );
     anyhow::ensure!(
-        firmware.address == protocol::LOGICAL_APPLICATION_ADDRESS,
-        "firmware is linked at the wrong application address"
+        firmware.address == platform.flash.address,
+        "firmware is linked at the wrong flash address"
     );
     anyhow::ensure!(
-        firmware.data.len() <= protocol::MAXIMUM_IMAGE_SIZE,
-        "firmware is larger than the application region"
+        firmware.data.len() <= platform.flash.size as usize,
+        "firmware is larger than the flash region"
     );
 
     let stack_pointer = u32::from_le_bytes(firmware.data[0..4].try_into().unwrap());
     let reset_handler = u32::from_le_bytes(firmware.data[4..8].try_into().unwrap());
     let reset_address = reset_handler & !1;
-    let stack_valid =
-        (0x2000_0000..=0x200A_0000).contains(&stack_pointer) && stack_pointer % 8 == 0;
+    let stack_valid = (platform.ram.address..=platform.ram.end()).contains(&stack_pointer)
+        && stack_pointer % 8 == 0;
     let reset_valid = (reset_handler & 1) != 0
-        && reset_address >= protocol::LOGICAL_APPLICATION_ADDRESS
-        && reset_address
-            < protocol::LOGICAL_APPLICATION_ADDRESS + protocol::MAXIMUM_IMAGE_SIZE as u32;
+        && (platform.flash.address..platform.flash.end()).contains(&reset_address);
     anyhow::ensure!(
         stack_valid && reset_valid,
-        "firmware vector table is not valid for STM32H563"
+        "firmware vector table is not valid for the ECU's platform"
     );
     Ok(())
 }

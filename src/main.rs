@@ -92,7 +92,7 @@ fn run() -> Result<()> {
         .ecu
         .as_deref()
         .context("--ecu is required for CAN commands")?;
-    let ecu = config::select_ecu(&config_file, ecu_name)?;
+    let (ecu, platform) = config::select_ecu(&config_file, ecu_name)?;
     let ecu_display = ecu_name.to_ascii_uppercase();
 
     let can = SocketCan::open(&interface)
@@ -127,7 +127,7 @@ fn run() -> Result<()> {
             file,
             already_in_bootloader,
         } => {
-            let image = firmware::load(&file)?;
+            let image = firmware::load(&file, &platform)?;
             println!("{ecu_display} flash request received");
             println!("Firmware: {}", file.display());
             println!("Format:   {}", image.format);
