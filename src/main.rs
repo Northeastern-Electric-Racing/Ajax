@@ -24,7 +24,7 @@ struct Cli {
     #[arg(long, global = true, default_value = "can0")]
     interface: String,
 
-    /// Path to ECU config file.
+    /// Path to an ECU config file; defaults to the built-in ecus.json.
     #[arg(long, global = true)]
     config: Option<PathBuf>,
 
@@ -70,15 +70,11 @@ fn main() {
 fn run() -> Result<()> {
     let cli = Cli::parse();
 
-    let executable_path = std::env::current_exe().context("failed to determine executable path")?;
-    let executable_directory = executable_path
-        .parent()
-        .context("failed to determine executable directory")?;
-    let config_path = cli
-        .config
-        .unwrap_or_else(|| executable_directory.join("ecus.json"));
-
-    let config_file = config::load(&config_path)?;
+    let config_file = match cli.config {
+        Some(path) => config::load(&path)?,
+        None => config::parse(config::BUILT_IN_ECUS_JSON)
+            .context("failed to parse built-in ecus.json")?,
+    };
     let interface = cli.interface;
     let command = cli.command;
     if let Command::Serve { port } = command {

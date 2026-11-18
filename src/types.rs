@@ -41,7 +41,7 @@ pub struct Region {
 }
 
 impl Region {
-    /// Exclusive end address; `config::load` rejects regions that overflow.
+    /// Exclusive end address; `config::parse` rejects regions that overflow.
     pub fn end(self) -> u32 {
         self.address + self.size
     }

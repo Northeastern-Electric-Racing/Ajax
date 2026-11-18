@@ -2,11 +2,18 @@ use crate::types::{ConfigFile, EcuDefinition, PlatformDefinition};
 use anyhow::{Context, Result, ensure};
 use std::{collections::HashSet, fs, path::Path};
 
+// ecus.json from the Odyssey-Definitions submodule, used unless --config is given.
+pub const BUILT_IN_ECUS_JSON: &str =
+    include_str!("../Odyssey-Definitions/can-bootloader/ecus.json");
+
 pub fn load(path: &Path) -> Result<ConfigFile> {
     let text = fs::read_to_string(path)
         .with_context(|| format!("failed to read config {}", path.display()))?;
-    let config: ConfigFile = serde_json::from_str(&text)
-        .with_context(|| format!("failed to parse config {}", path.display()))?;
+    parse(&text).with_context(|| format!("failed to parse config {}", path.display()))
+}
+
+pub fn parse(text: &str) -> Result<ConfigFile> {
+    let config: ConfigFile = serde_json::from_str(text)?;
     ensure!(
         config.schema_version == 1,
         "unsupported schema_version; expected 1"
@@ -67,7 +74,7 @@ pub fn load(path: &Path) -> Result<ConfigFile> {
     Ok(config)
 }
 
-/// Returns the ECU and its platform; `load` guarantees the platform exists.
+/// Returns the ECU and its platform; `parse` guarantees the platform exists.
 pub fn select_ecu(config: &ConfigFile, name: &str) -> Result<(EcuDefinition, PlatformDefinition)> {
     let ecu = config
         .ecus
