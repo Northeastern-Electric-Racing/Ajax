@@ -1,5 +1,9 @@
 use anyhow::{Context, Result};
-use socketcan::{CanFrame as SocketCanFrame, CanSocket as RawCanSocket, EmbeddedFrame, Id, Socket};
+use socketcan::{
+    CanFilter, CanFrame as SocketCanFrame, CanSocket as RawCanSocket, EmbeddedFrame, Id, Socket,
+    SocketOptions,
+    id::{CAN_EFF_FLAG, CAN_EFF_MASK, CAN_RTR_FLAG, CAN_SFF_MASK, id_to_canid_t},
+};
 use std::{
     io,
     time::{Duration, Instant},
@@ -27,6 +31,18 @@ impl SocketCan {
             socket,
             cancelled: None,
         })
+    }
+
+    /// Only receive data frames with the ECU's response ID from ecus.json.
+    pub fn filter(&self, id: Id) -> Result<()> {
+        let mask = match id {
+            Id::Standard(_) => CAN_SFF_MASK,
+            Id::Extended(_) => CAN_EFF_MASK,
+        } | CAN_EFF_FLAG
+            | CAN_RTR_FLAG;
+        self.socket
+            .set_filters(&[CanFilter::new(id_to_canid_t(id), mask)])
+            .context("failed to set CAN receive filter")
     }
 
     pub fn with_cancellation(

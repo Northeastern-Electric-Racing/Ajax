@@ -91,6 +91,7 @@ fn run() -> Result<()> {
 
     let can = SocketCan::open(&interface)
         .with_context(|| format!("failed to open CAN interface {interface}"))?;
+    can.filter(ecu.response_can_id()?)?;
     let flash_manager = FirmwareFlashManager::new(
         can,
         ecu.clone(),

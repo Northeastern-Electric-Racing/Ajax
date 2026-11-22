@@ -139,12 +139,19 @@ async fn flash(
 
     // Validate before starting the response so input/CAN setup failures keep HTTP error codes.
     let interface = server.interface.clone();
+    let response_id = ecu.response_can_id().map_err(bad_request)?;
     let (image, can, permit) = tokio::task::spawn_blocking(move || {
         let image = firmware::load(upload.file.path(), &platform).map_err(bad_request)?;
         let can = SocketCan::open(&interface).map_err(|e| {
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 format!("Cannot open {interface}: {e:#}"),
+            )
+        })?;
+        can.filter(response_id).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Cannot configure {interface}: {e:#}"),
             )
         })?;
         Ok::<_, ApiError>((image, can, permit))
