@@ -76,19 +76,26 @@ impl SocketCan {
     }
 
     fn receive_once(&self, timeout: Duration) -> Result<Option<CanFrame>> {
-        match self.socket.read_frame_timeout(timeout) {
-            Ok(SocketCanFrame::Data(frame)) => Ok(Some(CanFrame {
-                id: frame.id(),
-                data: frame.data().to_vec(),
-            })),
-            Ok(_) => Ok(None),
-            Err(error)
-                if error.kind() == io::ErrorKind::WouldBlock
-                    || error.kind() == io::ErrorKind::TimedOut =>
-            {
-                Ok(None)
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match self.socket.read_frame_timeout(remaining) {
+                Ok(SocketCanFrame::Data(frame)) => {
+                    return Ok(Some(CanFrame {
+                        id: frame.id(),
+                        data: frame.data().to_vec(),
+                    }));
+                }
+                // Skip remote and error frames without ending the wait early.
+                Ok(_) => {}
+                Err(error)
+                    if error.kind() == io::ErrorKind::WouldBlock
+                        || error.kind() == io::ErrorKind::TimedOut =>
+                {
+                    return Ok(None);
+                }
+                Err(error) => return Err(error).context("CAN receive failed"),
             }
-            Err(error) => Err(error).context("CAN receive failed"),
         }
     }
 
