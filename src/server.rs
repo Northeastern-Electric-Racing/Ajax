@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use axum::{
     Router,
     body::{Body, Bytes},
-    extract::{DefaultBodyLimit, Multipart, State},
+    extract::{DefaultBodyLimit, Multipart, State, multipart::MultipartError},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -69,7 +69,12 @@ struct Upload {
 }
 
 fn bad_request(error: impl std::fmt::Display) -> ApiError {
-    (StatusCode::BAD_REQUEST, error.to_string())
+    // Alternate format keeps the cause chain of anyhow errors.
+    (StatusCode::BAD_REQUEST, format!("{error:#}"))
+}
+
+fn multipart_error(error: MultipartError) -> ApiError {
+    (error.status(), error.body_text())
 }
 
 async fn read_upload(mut multipart: Multipart) -> Result<Upload, ApiError> {
@@ -77,28 +82,29 @@ async fn read_upload(mut multipart: Multipart) -> Result<Upload, ApiError> {
     let mut file = None;
     let mut filename = String::from("firmware.elf");
     let mut already_in_bootloader = None;
-    while let Some(field) = multipart.next_field().await.map_err(bad_request)? {
+    while let Some(field) = multipart.next_field().await.map_err(multipart_error)? {
         match field.name() {
             Some("ecu") if ecu.is_none() => {
-                let value = field.text().await.map_err(bad_request)?;
+                let value = field.text().await.map_err(multipart_error)?;
                 if value.trim().is_empty() {
                     return Err(bad_request("ecu must not be empty"));
                 }
                 ecu = Some(value);
             }
             Some("already_in_bootloader") if already_in_bootloader.is_none() => {
-                already_in_bootloader =
-                    Some(match field.text().await.map_err(bad_request)?.as_str() {
+                already_in_bootloader = Some(
+                    match field.text().await.map_err(multipart_error)?.as_str() {
                         "true" => true,
                         "false" => false,
                         _ => {
                             return Err(bad_request("already_in_bootloader must be true or false"));
                         }
-                    });
+                    },
+                );
             }
             Some("file") if file.is_none() => {
                 filename = field.file_name().unwrap_or("firmware.elf").to_owned();
-                let bytes = field.bytes().await.map_err(bad_request)?;
+                let bytes = field.bytes().await.map_err(multipart_error)?;
                 let lowercase = filename.to_ascii_lowercase();
                 let is_hex = lowercase.ends_with(".hex") || lowercase.ends_with(".ihex");
                 if !is_hex && !bytes.starts_with(b"\x7fELF") {
@@ -282,6 +288,57 @@ mod tests {
             let response = app.oneshot(request("--test\r\nContent-Disposition: form-data; name=\"ecu\"\r\n\r\nunknown\r\n--test\r\nContent-Disposition: form-data; name=\"file\"; filename=\"app\"\r\n\r\n\x7fELFtest\r\n--test--\r\n")).await.unwrap();
             assert_eq!(response.status(), StatusCode::BAD_REQUEST);
             assert_eq!(status(State(server)).await, "idle");
+        });
+    }
+
+    fn upload(filename: &str, contents: &str) -> Request<Body> {
+        let body = format!(
+            "--test\r\nContent-Disposition: form-data; name=\"ecu\"\r\n\r\nmsb_front\r\n\
+             --test\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n\r\n\
+             {contents}\r\n--test--\r\n"
+        );
+        Request::post("/flash")
+            .header("content-type", "multipart/form-data; boundary=test")
+            .body(Body::from(body))
+            .unwrap()
+    }
+
+    async fn send(app: Router, request: Request<Body>) -> (StatusCode, String) {
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&body).into_owned())
+    }
+
+    #[test]
+    fn accepts_hex_and_reports_upload_errors() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let server = Arc::new(Server {
+                config: config::parse(config::BUILT_IN_ECUS_JSON).unwrap(),
+                interface: "nonexistent-test-interface".into(),
+                operation: Arc::new(Semaphore::new(1)),
+            });
+            let app = |limit| {
+                Router::new()
+                    .route("/flash", post(flash))
+                    .layer(DefaultBodyLimit::max(limit))
+                    .with_state(server.clone())
+            };
+
+            // Vector table at the flash start: stack 0x20001000, reset handler 0x08010101.
+            let hex = ":020000040801F1\n:080000000010002001010108BD\n:00000001FF";
+            let (status, body) = send(app(MAX_UPLOAD), upload("app.hex", hex)).await;
+            // Parsing passed; only opening the missing CAN interface failed.
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+
+            let (status, body) = send(app(MAX_UPLOAD), upload("app.hex", ":10000000é0")).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(body, "invalid HEX at line 1: non-ASCII hex characters");
+
+            let (status, _) = send(app(256), upload("app.hex", &"0".repeat(1000))).await;
+            assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
         });
     }
 }
