@@ -1,3 +1,5 @@
+//! Ajax flashes ECU firmware over CAN, from the command line or as an HTTP server.
+
 mod can;
 mod config;
 mod firmware;

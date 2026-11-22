@@ -1,17 +1,21 @@
+//! Loads and validates the ECU configuration from ecus.json.
+
 use crate::types::{ConfigFile, EcuDefinition, PlatformDefinition};
 use anyhow::{Context, Result, ensure};
 use std::{collections::HashSet, fs, path::Path};
 
-// ecus.json from the Odyssey-Definitions submodule, used unless --config is given.
+/// ecus.json from the Odyssey-Definitions submodule, used unless --config is given.
 pub const BUILT_IN_ECUS_JSON: &str =
     include_str!("../Odyssey-Definitions/can-bootloader/ecus.json");
 
+/// Reads and validates a config file from disk.
 pub fn load(path: &Path) -> Result<ConfigFile> {
     let text = fs::read_to_string(path)
         .with_context(|| format!("failed to read config {}", path.display()))?;
     parse(&text).with_context(|| format!("failed to parse config {}", path.display()))
 }
 
+/// Parses ecus.json and checks its platforms, ECU names, bitrate, and CAN IDs.
 pub fn parse(text: &str) -> Result<ConfigFile> {
     let config: ConfigFile = serde_json::from_str(text)?;
     ensure!(

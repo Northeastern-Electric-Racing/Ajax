@@ -1,4 +1,4 @@
-//! HTTP uploads reuse the existing firmware validation and CAN flash sequence.
+//! HTTP server for firmware uploads, using the same validation and flashing as the CLI.
 
 use std::{
     convert::Infallible,
@@ -31,6 +31,7 @@ struct Server {
     operation: Arc<Semaphore>,
 }
 
+/// Serves `/flash` and `/status` on `port` until stopped.
 pub fn run(config: ConfigFile, interface: String, port: u16) -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(async {
@@ -53,6 +54,7 @@ pub fn run(config: ConfigFile, interface: String, port: u16) -> Result<()> {
     })
 }
 
+/// Returns `busy` while a flash is running, otherwise `idle`.
 async fn status(State(server): State<Arc<Server>>) -> &'static str {
     if server.operation.available_permits() == 0 {
         "busy"
@@ -77,6 +79,7 @@ fn multipart_error(error: MultipartError) -> ApiError {
     (error.status(), error.body_text())
 }
 
+/// Reads the ECU name, firmware file, and `already_in_bootloader` flag from the upload.
 async fn read_upload(mut multipart: Multipart) -> Result<Upload, ApiError> {
     let mut ecu = None;
     let mut file = None;
@@ -131,6 +134,7 @@ async fn read_upload(mut multipart: Multipart) -> Result<Upload, ApiError> {
     })
 }
 
+/// Handles `POST /flash`: validates the upload, then streams flash progress as NDJSON.
 async fn flash(
     State(server): State<Arc<Server>>,
     multipart: Multipart,
@@ -244,6 +248,7 @@ fn send_event(sender: &mpsc::UnboundedSender<Bytes>, event: serde_json::Value) {
     let _ = sender.send(Bytes::from(format!("{event}\n")));
 }
 
+/// Streams progress events into the HTTP response body.
 struct ProgressStream(mpsc::UnboundedReceiver<Bytes>);
 
 impl futures_core::Stream for ProgressStream {

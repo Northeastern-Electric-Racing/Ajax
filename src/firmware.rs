@@ -1,9 +1,12 @@
+//! Loads ELF, HEX, and BIN firmware and checks it fits the ECU's flash.
+
 use crate::types::{Firmware, PlatformDefinition};
 use anyhow::{Context, Result};
 use std::{collections::BTreeMap, fs, path::Path};
 
 const CRC_POLYNOMIAL: u32 = 0x04C1_1DB7;
 
+/// Loads an image by file extension, or by ELF header if there is none, and validates it.
 pub fn load(path: &Path, platform: &PlatformDefinition) -> Result<Firmware> {
     let extension = path
         .extension()
@@ -38,6 +41,7 @@ fn has_elf_magic(path: &Path) -> Result<bool> {
     Ok(bytes_read == magic.len() && magic == *b"\x7FELF")
 }
 
+/// Loads a raw binary, placed at the start of the flash region.
 fn load_bin(path: &Path, platform: &PlatformDefinition) -> Result<Firmware> {
     let data = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     anyhow::ensure!(!data.is_empty(), "BIN file is empty");
@@ -49,6 +53,7 @@ fn load_bin(path: &Path, platform: &PlatformDefinition) -> Result<Firmware> {
     })
 }
 
+/// Parses Intel HEX records into bytes by address.
 fn load_hex(path: &Path) -> Result<BTreeMap<u32, u8>> {
     let text = fs::read_to_string(path)?;
     let mut memory = BTreeMap::new();
@@ -114,6 +119,7 @@ fn load_hex(path: &Path) -> Result<BTreeMap<u32, u8>> {
     Ok(memory)
 }
 
+/// Collects the bytes of loadable 32-bit ARM ELF segments by address.
 fn load_elf(path: &Path, platform: &PlatformDefinition) -> Result<BTreeMap<u32, u8>> {
     let elf = fs::read(path)?;
     anyhow::ensure!(elf.len() >= 52, "ELF file is too short");
@@ -145,6 +151,7 @@ fn load_elf(path: &Path, platform: &PlatformDefinition) -> Result<BTreeMap<u32, 
         let virtual_address = u32::from_le_bytes(h[8..12].try_into().unwrap());
         let physical_address = u32::from_le_bytes(h[12..16].try_into().unwrap());
         let file_size = u32::from_le_bytes(h[16..20].try_into().unwrap()) as usize;
+        // Prefer the load address, where initialized data is stored in flash.
         let address = if physical_address != 0 {
             physical_address
         } else {
@@ -172,6 +179,7 @@ fn load_elf(path: &Path, platform: &PlatformDefinition) -> Result<BTreeMap<u32, 
     Ok(memory)
 }
 
+/// Flattens bytes by address into one image from the flash start, filling gaps with 0xFF.
 fn create_mapped(
     platform: &PlatformDefinition,
     format: &'static str,
@@ -205,6 +213,7 @@ fn create_mapped(
     })
 }
 
+/// Checks the image's address and size, and that its vector table points into RAM and flash.
 fn validate(firmware: &Firmware, platform: &PlatformDefinition) -> Result<()> {
     anyhow::ensure!(
         firmware.data.len() >= 8,
@@ -233,6 +242,7 @@ fn validate(firmware: &Firmware, platform: &PlatformDefinition) -> Result<()> {
     Ok(())
 }
 
+/// CRC-32 as the bootloader computes it: polynomial 0x04C11DB7, initial 0xFFFFFFFF, no reflection.
 pub fn crc32_stm32(data: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFFu32;
     for &value in data {
@@ -248,6 +258,7 @@ pub fn crc32_stm32(data: &[u8]) -> u32 {
     crc
 }
 
+/// Stores a byte, rejecting a different value already at that address.
 fn insert_byte(memory: &mut BTreeMap<u32, u8>, address: u32, value: u8) -> Result<()> {
     if let Some(old) = memory.insert(address, value) {
         anyhow::ensure!(
