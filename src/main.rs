@@ -1,5 +1,3 @@
-#![deny(warnings)]
-
 mod can;
 mod config;
 mod firmware;
