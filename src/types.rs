@@ -1,6 +1,9 @@
+//! Firmware image and ECU configuration types.
+
 use serde::Deserialize;
 use socketcan::{ExtendedId, Id, StandardId};
 
+/// A flat firmware image to write, starting at `address`.
 #[derive(Debug, Clone)]
 pub struct Firmware {
     pub data: Vec<u8>,
@@ -9,11 +12,13 @@ pub struct Firmware {
     pub format: &'static str,
 }
 
+/// Bootloader status; `version` holds the major and minor numbers in its high and low nibbles.
 #[derive(Debug, Clone, Copy)]
 pub struct BootStatus {
     pub version: u8,
 }
 
+/// The contents of ecus.json.
 #[derive(Debug, Deserialize)]
 pub struct ConfigFile {
     pub schema_version: u32,
@@ -24,6 +29,7 @@ pub struct ConfigFile {
     pub ecus: std::collections::BTreeMap<String, EcuDefinition>,
 }
 
+/// A chip's application flash and RAM regions.
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlatformDefinition {
@@ -47,6 +53,7 @@ impl Region {
     }
 }
 
+/// One ECU from ecus.json.
 #[derive(Debug, Clone, Deserialize)]
 pub struct EcuDefinition {
     pub label: String,
@@ -54,6 +61,7 @@ pub struct EcuDefinition {
     pub can: CanConfig,
 }
 
+/// The CAN IDs one ECU's bootloader uses.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CanConfig {
@@ -72,6 +80,7 @@ pub struct CanId {
 }
 
 impl CanId {
+    /// Converts to a standard or extended ID, checking that it fits in 11 or 29 bits.
     pub fn to_id(self) -> anyhow::Result<Id> {
         let id = if self.is_ext {
             ExtendedId::new(self.id).map(Id::Extended)

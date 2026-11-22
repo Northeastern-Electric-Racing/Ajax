@@ -1,3 +1,5 @@
+//! Bootloader CAN protocol bytes; these must match the bootloader in firmware-rs.
+
 pub const ACK: u8 = 0x5A;
 pub const NACK: u8 = 0xB5;
 
@@ -9,5 +11,7 @@ pub const ACTIVATE: u8 = 0xA7;
 pub const COMPUTE_CRC: u8 = 0xA8;
 pub const START_UPDATE: u8 = 0xA9;
 
+/// Largest block written by one WRITE_MEMORY request.
 pub const MAXIMUM_WRITE_SIZE: usize = 256;
+/// Image bytes in each data packet, after its sequence byte.
 pub const WRITE_FRAME_PAYLOAD_SIZE: usize = 7;

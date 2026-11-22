@@ -1,3 +1,5 @@
+//! Flashes an ECU over CAN: enter the bootloader, write the image, check its CRC, and activate it.
+
 use crate::{
     can::{CanFrame, SocketCan},
     protocol,
@@ -23,6 +25,7 @@ enum AckStatus {
     Timeout,
 }
 
+/// Runs bootloader commands for one ECU over a CAN socket.
 pub struct FirmwareFlashManager {
     can: SocketCan,
     ecu: EcuDefinition,
@@ -38,6 +41,7 @@ impl FirmwareFlashManager {
         }
     }
 
+    /// Sleeps for `duration`, stopping early if the flash is cancelled.
     fn wait(&self, duration: Duration) -> Result<()> {
         let deadline = Instant::now() + duration;
         loop {
@@ -50,12 +54,14 @@ impl FirmwareFlashManager {
         }
     }
 
+    /// Checks that the bootloader responds.
     pub fn ping(&self) -> Result<()> {
         self.retry("ping", || {
             self.send_command_wait_ack(&[protocol::GET_INFO], protocol::GET_INFO, COMMAND_TIMEOUT)
         })
     }
 
+    /// Asks the running application to reset into the bootloader, then waits for its response.
     pub fn request_bootloader(&self) -> Result<()> {
         let id = self.ecu.boot_request_can_id()?;
 
@@ -78,20 +84,26 @@ impl FirmwareFlashManager {
         anyhow::bail!("failed to enter bootloader after {MAX_ATTEMPTS} attempts")
     }
 
+    /// Reads the bootloader version.
     pub fn get_status(&self) -> Result<BootStatus> {
         self.retry("get-status", || self.get_status_once())
     }
 
+    /// Asks the bootloader to start the application.
     pub fn start_application(&self) -> Result<()> {
         self.send_command_wait_ack(&[protocol::START_APP], protocol::START_APP, COMMAND_TIMEOUT)
     }
 
+    /// Flashes the image, drawing progress on the terminal.
     pub fn flash(&self, image: &Firmware, already_in_bootloader: bool) -> Result<()> {
         self.flash_with_progress(image, already_in_bootloader, print_progress)?;
         println!();
         Ok(())
     }
 
+    /// Flashes the image, reporting each step's percent, stage, and detail to `progress`.
+    ///
+    /// The image is only activated once the bootloader's CRC matches.
     pub fn flash_with_progress(
         &self,
         image: &Firmware,
@@ -148,6 +160,7 @@ impl FirmwareFlashManager {
         })
     }
 
+    /// Sends the image size and CRC before writing.
     fn start_update(&self, image: &Firmware) -> Result<()> {
         anyhow::ensure!(
             image.data.len() <= 0xFF_FFFF,
@@ -185,6 +198,7 @@ impl FirmwareFlashManager {
         anyhow::bail!("write block rejected after {MAX_ATTEMPTS} attempts")
     }
 
+    /// Writes one block: a WRITE_MEMORY request, then the data as sequenced packets.
     fn write_block(&self, offset: u32, data: &[u8]) -> Result<AckStatus> {
         anyhow::ensure!(
             data.len() <= protocol::MAXIMUM_WRITE_SIZE,
@@ -286,6 +300,7 @@ impl FirmwareFlashManager {
                 AckStatus::Timeout => {
                     if attempt < MAX_WRITE_ATTEMPTS {
                         self.wait(RETRY_DELAY)?;
+                        // Resending the request makes the bootloader re-ACK a block it already wrote.
                         self.can.send(self.ecu.request_can_id()?, request)?;
                     }
                 }
@@ -295,6 +310,7 @@ impl FirmwareFlashManager {
         Ok(AckStatus::Timeout)
     }
 
+    /// Asks the bootloader for the CRC of the written image.
     fn verify(&self) -> Result<u32> {
         self.can.clear()?;
         self.can
@@ -314,6 +330,7 @@ impl FirmwareFlashManager {
         self.wait_ack(command, timeout)
     }
 
+    /// Waits for the ACK of one data packet, matched by its sequence number.
     fn wait_write_packet_ack(&self, sequence: u8, timeout: Duration) -> Result<AckStatus> {
         let response_id = self.ecu.response_can_id()?;
         let deadline = Instant::now() + timeout;
@@ -357,6 +374,7 @@ impl FirmwareFlashManager {
         }
     }
 
+    /// Waits for an ACK or NACK to `command`.
     fn wait_ack_status(&self, command: u8, timeout: Duration) -> Result<AckStatus> {
         let response_id = self.ecu.response_can_id()?;
         let deadline = Instant::now() + timeout;
@@ -382,6 +400,7 @@ impl FirmwareFlashManager {
         Ok(AckStatus::Timeout)
     }
 
+    /// Waits for the reply to `command` with at least `minimum_length` bytes.
     fn wait_response(
         &self,
         command: u8,
@@ -405,6 +424,7 @@ impl FirmwareFlashManager {
         anyhow::bail!("timed out waiting for response to command 0x{command:02X}")
     }
 
+    /// Runs `operation` up to `MAX_ATTEMPTS` times, returning the last error.
     fn retry<T, F>(&self, name: &str, mut operation: F) -> Result<T>
     where
         F: FnMut() -> Result<T>,
@@ -426,6 +446,7 @@ impl FirmwareFlashManager {
     }
 }
 
+/// Draws a progress bar.
 fn print_progress(percent: f64, stage: &str, detail: Option<&str>) -> Result<()> {
     const BAR_WIDTH: usize = 24;
 

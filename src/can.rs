@@ -1,5 +1,11 @@
+//! SocketCAN access used to talk to an ECU's bootloader.
+
 use anyhow::{Context, Result};
-use socketcan::{CanFrame as SocketCanFrame, CanSocket as RawCanSocket, EmbeddedFrame, Id, Socket};
+use socketcan::{
+    CanFilter, CanFrame as SocketCanFrame, CanSocket as RawCanSocket, EmbeddedFrame, Id, Socket,
+    SocketOptions,
+    id::{CAN_EFF_FLAG, CAN_EFF_MASK, CAN_RTR_FLAG, CAN_SFF_MASK, id_to_canid_t},
+};
 use std::{
     io,
     time::{Duration, Instant},
@@ -7,18 +13,21 @@ use std::{
 
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
+/// A received classical CAN data frame.
 #[derive(Debug, Clone)]
 pub struct CanFrame {
     pub id: Id,
     pub data: Vec<u8>,
 }
 
+/// A raw CAN socket that can be cancelled during a flash.
 pub struct SocketCan {
     socket: RawCanSocket,
     cancelled: Option<Box<dyn Fn() -> bool + Send + Sync>>,
 }
 
 impl SocketCan {
+    /// Opens a raw CAN socket on the interface, such as `can0`.
     pub fn open(interface: &str) -> Result<Self> {
         let socket = RawCanSocket::open(interface)
             .with_context(|| format!("failed to open CAN interface '{interface}'"))?;
@@ -29,6 +38,19 @@ impl SocketCan {
         })
     }
 
+    /// Only receive data frames with the ECU's response ID from ecus.json.
+    pub fn filter(&self, id: Id) -> Result<()> {
+        let mask = match id {
+            Id::Standard(_) => CAN_SFF_MASK,
+            Id::Extended(_) => CAN_EFF_MASK,
+        } | CAN_EFF_FLAG
+            | CAN_RTR_FLAG;
+        self.socket
+            .set_filters(&[CanFilter::new(id_to_canid_t(id), mask)])
+            .context("failed to set CAN receive filter")
+    }
+
+    /// Fails further CAN operations once `cancelled` returns true.
     pub fn with_cancellation(
         mut self,
         cancelled: impl Fn() -> bool + Send + Sync + 'static,
@@ -39,6 +61,7 @@ impl SocketCan {
         Ok(self)
     }
 
+    /// Returns an error if the flash was cancelled.
     pub fn check_cancelled(&self) -> Result<()> {
         anyhow::ensure!(
             !self.cancelled.as_ref().is_some_and(|cancelled| cancelled()),
@@ -47,6 +70,7 @@ impl SocketCan {
         Ok(())
     }
 
+    /// Sends one data frame of up to 8 bytes.
     pub fn send(&self, id: Id, data: &[u8]) -> Result<()> {
         self.check_cancelled()?;
         anyhow::ensure!(data.len() <= 8, "Classical CAN payload exceeds 8 bytes");
@@ -59,6 +83,7 @@ impl SocketCan {
             .context("CAN transmit failed")
     }
 
+    /// Waits up to `timeout` for the next data frame; `None` if none arrives.
     pub fn receive(&self, timeout: Duration) -> Result<Option<CanFrame>> {
         if self.cancelled.is_none() {
             return self.receive_once(timeout);
@@ -76,22 +101,30 @@ impl SocketCan {
     }
 
     fn receive_once(&self, timeout: Duration) -> Result<Option<CanFrame>> {
-        match self.socket.read_frame_timeout(timeout) {
-            Ok(SocketCanFrame::Data(frame)) => Ok(Some(CanFrame {
-                id: frame.id(),
-                data: frame.data().to_vec(),
-            })),
-            Ok(_) => Ok(None),
-            Err(error)
-                if error.kind() == io::ErrorKind::WouldBlock
-                    || error.kind() == io::ErrorKind::TimedOut =>
-            {
-                Ok(None)
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match self.socket.read_frame_timeout(remaining) {
+                Ok(SocketCanFrame::Data(frame)) => {
+                    return Ok(Some(CanFrame {
+                        id: frame.id(),
+                        data: frame.data().to_vec(),
+                    }));
+                }
+                // Skip remote and error frames without ending the wait early.
+                Ok(_) => {}
+                Err(error)
+                    if error.kind() == io::ErrorKind::WouldBlock
+                        || error.kind() == io::ErrorKind::TimedOut =>
+                {
+                    return Ok(None);
+                }
+                Err(error) => return Err(error).context("CAN receive failed"),
             }
-            Err(error) => Err(error).context("CAN receive failed"),
         }
     }
 
+    /// Discards frames already queued on the socket.
     pub fn clear(&self) -> Result<()> {
         while self.receive(Duration::ZERO)?.is_some() {}
         Ok(())

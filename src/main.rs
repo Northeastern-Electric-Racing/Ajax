@@ -1,4 +1,4 @@
-#![deny(warnings)]
+//! Ajax flashes ECU firmware over CAN, from the command line or as an HTTP server.
 
 mod can;
 mod config;
@@ -93,6 +93,7 @@ fn run() -> Result<()> {
 
     let can = SocketCan::open(&interface)
         .with_context(|| format!("failed to open CAN interface {interface}"))?;
+    can.filter(ecu.response_can_id()?)?;
     let flash_manager = FirmwareFlashManager::new(
         can,
         ecu.clone(),
