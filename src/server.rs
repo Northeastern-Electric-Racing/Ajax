@@ -99,12 +99,14 @@ async fn read_upload(mut multipart: Multipart) -> Result<Upload, ApiError> {
             Some("file") if file.is_none() => {
                 filename = field.file_name().unwrap_or("firmware.elf").to_owned();
                 let bytes = field.bytes().await.map_err(bad_request)?;
-                if !bytes.starts_with(b"\x7fELF") {
-                    return Err(bad_request("file must be an ELF image"));
+                let lowercase = filename.to_ascii_lowercase();
+                let is_hex = lowercase.ends_with(".hex") || lowercase.ends_with(".ihex");
+                if !is_hex && !bytes.starts_with(b"\x7fELF") {
+                    return Err(bad_request("file must be an ELF or Intel HEX image"));
                 }
                 // Never use the client-supplied filename as a filesystem path.
                 let mut temporary = tempfile::Builder::new()
-                    .suffix(".elf")
+                    .suffix(if is_hex { ".hex" } else { ".elf" })
                     .tempfile()
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 temporary

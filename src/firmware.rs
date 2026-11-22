@@ -92,7 +92,10 @@ fn load_hex(path: &Path) -> Result<BTreeMap<u32, u8>> {
             0x00 => {
                 let address = address_base + offset;
                 for (i, value) in payload.iter().enumerate() {
-                    insert_byte(&mut memory, address + i as u32, *value)?;
+                    let byte_address = address.checked_add(i as u32).with_context(|| {
+                        format!("HEX address overflows at line {}", line_index + 1)
+                    })?;
+                    insert_byte(&mut memory, byte_address, *value)?;
                 }
             }
             0x01 => break,
@@ -256,6 +259,7 @@ fn insert_byte(memory: &mut BTreeMap<u32, u8>, address: u32, value: u8) -> Resul
 }
 
 fn decode_hex(text: &str) -> Result<Vec<u8>> {
+    anyhow::ensure!(text.is_ascii(), "non-ASCII hex characters");
     anyhow::ensure!(text.len().is_multiple_of(2), "odd hex length");
     let mut out = Vec::with_capacity(text.len() / 2);
     for i in (0..text.len()).step_by(2) {
@@ -279,4 +283,30 @@ fn u32_le(data: &[u8], offset: usize) -> Result<u32> {
             .try_into()
             .unwrap(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn load_hex_text(text: &str) -> Result<BTreeMap<u32, u8>> {
+        let mut file = tempfile::Builder::new().suffix(".hex").tempfile()?;
+        file.write_all(text.as_bytes())?;
+        load_hex(file.path())
+    }
+
+    #[test]
+    fn rejects_non_ascii_hex() {
+        let error = load_hex_text(":10000000é0\n").unwrap_err();
+        assert!(format!("{error:#}").contains("non-ASCII hex characters"));
+    }
+
+    #[test]
+    fn rejects_hex_address_overflow() {
+        // Extended linear address 0xFFFF, then 4 bytes at 0xFFFE run past 0xFFFFFFFF.
+        let error =
+            load_hex_text(":02000004FFFFFC\n:04FFFE00AABBCCDDF1\n:00000001FF\n").unwrap_err();
+        assert!(format!("{error:#}").contains("HEX address overflows at line 2"));
+    }
 }
