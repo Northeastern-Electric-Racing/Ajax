@@ -76,7 +76,15 @@ fn bad_request(error: impl std::fmt::Display) -> ApiError {
 }
 
 fn multipart_error(error: MultipartError) -> ApiError {
-    (error.status(), error.body_text())
+    let status = error.status();
+    if status == StatusCode::PAYLOAD_TOO_LARGE {
+        let limit = MAX_UPLOAD / (1024 * 1024);
+        return (
+            status,
+            format!("firmware file exceeds the {limit} MB upload limit"),
+        );
+    }
+    (status, error.body_text())
 }
 
 /// Reads the ECU name, firmware file, and `already_in_bootloader` flag from the upload.
@@ -342,8 +350,9 @@ mod tests {
             assert_eq!(status, StatusCode::BAD_REQUEST);
             assert_eq!(body, "invalid HEX at line 1: non-ASCII hex characters");
 
-            let (status, _) = send(app(256), upload("app.hex", &"0".repeat(1000))).await;
+            let (status, body) = send(app(256), upload("app.hex", &"0".repeat(1000))).await;
             assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+            assert_eq!(body, "firmware file exceeds the 64 MB upload limit");
         });
     }
 }

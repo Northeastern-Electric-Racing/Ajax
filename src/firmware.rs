@@ -16,7 +16,7 @@ pub fn load(path: &Path, platform: &PlatformDefinition) -> Result<Firmware> {
 
     let firmware = match extension.as_str() {
         "bin" => load_bin(path, platform)?,
-        "hex" | "ihex" => create_mapped(platform, "HEX", load_hex(path)?)?,
+        "hex" | "ihex" => create_mapped(platform, "HEX", load_hex(path, platform)?)?,
         "elf" | "axf" => create_mapped(platform, "ELF", load_elf(path, platform)?)?,
         _ if has_elf_magic(path)? => create_mapped(platform, "ELF", load_elf(path, platform)?)?,
         _ => anyhow::bail!(
@@ -54,10 +54,13 @@ fn load_bin(path: &Path, platform: &PlatformDefinition) -> Result<Firmware> {
 }
 
 /// Parses Intel HEX records into bytes by address.
-fn load_hex(path: &Path) -> Result<BTreeMap<u32, u8>> {
-    let text = fs::read_to_string(path)?;
+fn load_hex(path: &Path, platform: &PlatformDefinition) -> Result<BTreeMap<u32, u8>> {
+    let text = String::from_utf8(fs::read(path)?)
+        .ok()
+        .context("HEX file is not text")?;
     let mut memory = BTreeMap::new();
     let mut address_base = 0u32;
+    let mut has_end_record = false;
 
     for (line_index, source) in text.lines().enumerate() {
         let line = source.trim();
@@ -96,14 +99,20 @@ fn load_hex(path: &Path) -> Result<BTreeMap<u32, u8>> {
         match record_type {
             0x00 => {
                 let address = address_base + offset;
+                // Check before storing the data, so a large file cannot use up memory.
+                anyhow::ensure!(
+                    address >= platform.flash.address
+                        && (address as u64 + length as u64) <= platform.flash.end() as u64,
+                    "HEX data at 0x{address:08X} is outside the flash region"
+                );
                 for (i, value) in payload.iter().enumerate() {
-                    let byte_address = address.checked_add(i as u32).with_context(|| {
-                        format!("HEX address overflows at line {}", line_index + 1)
-                    })?;
-                    insert_byte(&mut memory, byte_address, *value)?;
+                    insert_byte(&mut memory, address + i as u32, *value)?;
                 }
             }
-            0x01 => break,
+            0x01 => {
+                has_end_record = true;
+                break;
+            }
             0x02 => {
                 anyhow::ensure!(payload.len() == 2, "invalid extended segment record");
                 address_base = (u16::from_be_bytes([payload[0], payload[1]]) as u32) << 4;
@@ -116,6 +125,7 @@ fn load_hex(path: &Path) -> Result<BTreeMap<u32, u8>> {
             other => anyhow::bail!("unsupported HEX record type 0x{other:02X}"),
         }
     }
+    anyhow::ensure!(has_end_record, "HEX file is incomplete: no end record");
     Ok(memory)
 }
 
@@ -299,25 +309,77 @@ fn u32_le(data: &[u8], offset: usize) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::Region;
     use std::io::Write;
 
-    fn load_hex_text(text: &str) -> Result<BTreeMap<u32, u8>> {
+    const PLATFORM: PlatformDefinition = PlatformDefinition {
+        flash: Region {
+            address: 0x0801_0000,
+            size: 0xF_0000,
+        },
+        ram: Region {
+            address: 0x2000_0000,
+            size: 0xA_0000,
+        },
+    };
+
+    fn load_hex_bytes(bytes: &[u8]) -> Result<BTreeMap<u32, u8>> {
         let mut file = tempfile::Builder::new().suffix(".hex").tempfile()?;
-        file.write_all(text.as_bytes())?;
-        load_hex(file.path())
+        file.write_all(bytes)?;
+        load_hex(file.path(), &PLATFORM)
+    }
+
+    fn load_hex_error(bytes: &[u8]) -> String {
+        format!("{:#}", load_hex_bytes(bytes).unwrap_err())
     }
 
     #[test]
     fn rejects_non_ascii_hex() {
-        let error = load_hex_text(":10000000é0\n").unwrap_err();
-        assert!(format!("{error:#}").contains("non-ASCII hex characters"));
+        let error = load_hex_error(":10000000é0\n".as_bytes());
+        assert!(error.contains("non-ASCII hex characters"));
     }
 
     #[test]
-    fn rejects_hex_address_overflow() {
-        // Extended linear address 0xFFFF, then 4 bytes at 0xFFFE run past 0xFFFFFFFF.
-        let error =
-            load_hex_text(":02000004FFFFFC\n:04FFFE00AABBCCDDF1\n:00000001FF\n").unwrap_err();
-        assert!(format!("{error:#}").contains("HEX address overflows at line 2"));
+    fn rejects_hex_that_is_not_text() {
+        assert_eq!(load_hex_error(b"\x7fELF\xff\xfe"), "HEX file is not text");
+    }
+
+    #[test]
+    fn rejects_hex_outside_flash() {
+        for (hex, address) in [
+            // Extended linear address 0xFFFF, then 4 bytes at 0xFFFE run past 0xFFFFFFFF.
+            (
+                ":02000004FFFFFC\n:04FFFE00AABBCCDDF1\n:00000001FF\n",
+                "0xFFFFFFFE",
+            ),
+            // 4 bytes at 0x080FFFFE run past the end of flash.
+            (
+                ":02000004080FE3\n:04FFFE00AABBCCDDF1\n:00000001FF\n",
+                "0x080FFFFE",
+            ),
+            // 4 bytes at 0x0800FFFE start before flash.
+            (
+                ":020000040800F2\n:04FFFE00AABBCCDDF1\n:00000001FF\n",
+                "0x0800FFFE",
+            ),
+        ] {
+            assert_eq!(
+                load_hex_error(hex.as_bytes()),
+                format!("HEX data at {address} is outside the flash region")
+            );
+        }
+    }
+
+    #[test]
+    fn requires_hex_end_record() {
+        // 4 bytes at 0x080FFFFC end exactly at the end of flash.
+        let hex = ":02000004080FE3\n:04FFFC00AABBCCDDF3\n";
+        assert_eq!(
+            load_hex_error(hex.as_bytes()),
+            "HEX file is incomplete: no end record"
+        );
+        let memory = load_hex_bytes(format!("{hex}:00000001FF\n").as_bytes()).unwrap();
+        assert_eq!(memory.len(), 4);
+        assert_eq!(memory[&0x080F_FFFF], 0xDD);
     }
 }
